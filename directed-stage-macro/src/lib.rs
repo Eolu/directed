@@ -1,0 +1,462 @@
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, 
+          FnArg, ItemFn, Pat, Token, Type, ReturnType};
+use proc_macro_error::proc_macro_error;
+
+// TODO: Accept a single "out" attribute with a list of returns, rather than 1 per return.
+
+/// A macro that wraps a function with the standardized interface:
+/// fn fn_name(&mut DataMap, &DataMap) -> anyhow::Result<DataMap>
+///
+/// Example usage:
+///
+/// ```
+/// #[stage(lazy, transparent)]
+/// fn add_numbers(a: i32, b: i32) -> i32 {
+///     a + b
+/// }
+/// ```
+/// 
+/// Multiple outputs are also supported with this syntax:
+/// #[stage(out(arg1_name: String), out(arg2_name: Vec<u8>))]
+/// fn output_things() -> directed::NodeOutput {
+///    let some_string = String::from("Hello Graph!");
+///    let some_vec = vec![1, 2, 3, 4, 5];
+/// 
+///    // This builds an output type
+///    directed::output!{
+///        arg1_name: some_string,
+///        arg2_name: some_vec 
+///    }
+/// }
+#[proc_macro_attribute]
+#[proc_macro_error]
+pub fn stage(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input_fn = parse_macro_input!(item as ItemFn);
+    let meta_args = parse_macro_input!(attr as StageArgs);
+    generate_stage_impl(StageConfig::from_args(&input_fn, &meta_args).unwrap()).into()
+}
+
+// Configuration structs
+struct StageConfig {
+    original_fn: ItemFn,
+    stage_name: syn::Ident,
+    is_lazy: bool,
+    is_transparent: bool,
+    outputs: Vec<(String, Type)>,
+    inputs: Vec<InputParam>,
+}
+
+struct InputParam {
+    name: syn::Ident,
+    type_: Type,
+    // TODO: This should be used to to prevent handling unused params
+    is_unused: bool,
+    clean_name: String,
+}
+
+// Argument parsing structures
+#[derive(Clone)]
+struct Output {
+    name: syn::Ident,
+    ty: Type,
+}
+
+impl Parse for Output {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let name = input.parse()?;
+        let _colon_token: Token![:] = input.parse()?;
+        let ty = input.parse()?;
+        Ok(Output { name, ty })
+    }
+}
+
+enum StageArg {
+    Flag(syn::Ident),
+    Output(Output),
+}
+
+impl Parse for StageArg {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let lookahead = input.lookahead1();
+        
+        if lookahead.peek(syn::Ident) {
+            let ident: syn::Ident = input.parse()?;
+            
+            if ident == "out" {
+                let content;
+                let _paren_token = syn::parenthesized!(content in input);
+                return Ok(StageArg::Output(content.parse()?));
+            } else {
+                return Ok(StageArg::Flag(ident));
+            }
+        }
+        
+        Err(lookahead.error())
+    }
+}
+
+struct StageArgs {
+    args: Punctuated<StageArg, Token![,]>,
+}
+
+impl Parse for StageArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(StageArgs {
+            args: Punctuated::parse_terminated(input)?,
+        })
+    }
+}
+
+impl StageConfig {
+    fn from_args(input_fn: &ItemFn, meta_args: &StageArgs) -> syn::Result<Self> {
+        let stage_name = input_fn.sig.ident.clone();
+        
+        let mut is_lazy = false;
+        let mut is_transparent = false;
+        let mut outputs = Vec::new();
+        
+        // Process stage attribute arguments
+        for arg in meta_args.args.iter() {
+            match arg {
+                StageArg::Flag(ident) => {
+                    match ident.to_string().as_str() {
+                        "lazy" => is_lazy = true,
+                        "transparent" => is_transparent = true,
+                        unknown => return Err(syn::Error::new(ident.span(), format!("Unrecognized attribute: {}", unknown))),
+                    }
+                },
+                StageArg::Output(output) => {
+                    outputs.push((output.name.to_string(), output.ty.clone()));
+                }
+            }
+        }
+        
+        // Process function arguments to create input definitions
+        let inputs = Self::extract_input_params(&input_fn.sig.inputs)?;
+        
+        // If no outputs specified, process return type
+        if outputs.is_empty() {
+            outputs = Self::extract_outputs_from_return_type(&input_fn.sig.output)?;
+        }
+        
+        Ok(StageConfig {
+            original_fn: input_fn.clone(),
+            stage_name,
+            is_lazy,
+            is_transparent,
+            outputs,
+            inputs,
+        })
+    }
+    
+    fn extract_input_params(inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>) -> syn::Result<Vec<InputParam>> {
+        let mut result = Vec::new();
+        
+        for arg in inputs.iter() {
+            if let FnArg::Typed(pat_type) = arg {
+                if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                    let arg_name = &pat_ident.ident;
+                    let arg_type = &pat_type.ty;
+                    let arg_name_str = arg_name.to_string();
+                    
+                    let is_unused = arg_name_str.starts_with('_');
+                    let clean_name = if is_unused {
+                        arg_name_str[1..].to_string()
+                    } else {
+                        arg_name_str.clone()
+                    };
+                    
+                    result.push(InputParam {
+                        name: arg_name.clone(),
+                        type_: *arg_type.clone(),
+                        is_unused,
+                        clean_name,
+                    });
+                }
+            }
+        }
+        
+        Ok(result)
+    }
+    
+    fn extract_outputs_from_return_type(return_type: &ReturnType) -> syn::Result<Vec<(String, Type)>> {
+        match return_type {
+            ReturnType::Type(_, ty) => {
+                // Check if the return type is NodeOutput
+                if let Type::Path(type_path) = &**ty {
+                    if let Some(segment) = type_path.path.segments.last() {
+                        // TODO: This is a hack, just properly check if any our args exist
+                        if segment.ident == "NodeOutput" {
+                            // NodeOutput will be handled elsewhere
+                            return Ok(Vec::new());
+                        }
+                    }
+                }
+                
+                // Single output with default name
+                Ok(vec![("_".to_string(), (**ty).clone())])
+            },
+            ReturnType::Default => {
+                // Return type is (), use default name
+                Ok(vec![("_".to_string(), Type::Tuple(syn::TypeTuple {
+                    paren_token: syn::token::Paren::default(),
+                    elems: Punctuated::new(),
+                }))])
+            }
+        }
+    }
+    
+    fn is_multi_output(&self) -> bool {
+        if let ReturnType::Type(_, ty) = &self.original_fn.sig.output {
+            if let Type::Path(type_path) = &**ty {
+                if let Some(segment) = type_path.path.segments.last() {
+                    // TODO: This is a hack, just check if any out attributes exist
+                    return segment.ident == "NodeOutput";
+                }
+            }
+        }
+        false
+    }
+}
+
+/// This associates the names of function parameters with the TypeId of their type.
+/// 
+/// Used to build and validate I/O-based connections
+fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
+    inputs.iter().map(|input| {
+        let arg_name = &input.clean_name;
+        let arg_type = &input.type_;
+        
+        quote! {
+            inputs.insert(directed::DataLabel::new(#arg_name), std::any::TypeId::of::<#arg_type>());
+        }
+    }).collect()
+}
+
+/// This associates the names of function outputs with the TypeId of their type.
+/// When a function returns a NodeOutput type, this will associate meaningful
+/// names to each output. When a function returns any other type, this will
+/// simply associate that one type with the name '_'.
+/// 
+/// Used to build and validate I/O-based connections
+fn generate_output_registrations(outputs: &[(String, Type)]) -> Vec<proc_macro2::TokenStream> {
+    outputs.iter().map(|(name, ty)| {
+        quote! {
+            outputs.insert(directed::DataLabel::new(#name), std::any::TypeId::of::<#ty>());
+        }
+    }).collect()
+}
+
+/// This code is used by the wrapper function - it downcasts type-erased
+/// function parameters so that the user-facing function can be called with
+/// concrete types.
+fn generate_extraction_code(inputs: &[InputParam], is_transparent: bool) -> Vec<proc_macro2::TokenStream> {
+    inputs.iter().map(|input| {
+        let arg_name = &input.name;
+        let arg_type = &input.type_;
+        let clean_arg_name = &input.clean_name;
+        
+        if is_transparent {
+            // TODO: This could be done without cloning inputs - just pass by ref!
+            quote! {
+                let #arg_name: #arg_type = if let Some(input) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
+                    match input.downcast_ref::<#arg_type>() {
+                        Some(val) => val.clone(),
+                        None => return Err(anyhow::anyhow!("Type mismatch for input {}, expected: {}", 
+                                                           #clean_arg_name, stringify!(#arg_type)))
+                    }
+                } else {
+                    return Err(anyhow::anyhow!("Missing required input: {}", #clean_arg_name));
+                };
+            }
+        } else {
+            quote! {
+                // Non-transparent functions never clone, always move
+                let #arg_name: #arg_type = if let Some(input) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
+                    match input.downcast::<Box<#arg_type>>() {
+                        Ok(val) => **val,
+                        Err(_) => return Err(anyhow::anyhow!("Type mismatch for input {}, expected: {}", 
+                                                             #clean_arg_name, stringify!(#arg_type)))
+                    }
+                } else {
+                    return Err(anyhow::anyhow!("Missing required input: {}", #clean_arg_name));
+                };
+            }
+        }
+    }).collect()
+}
+
+/// This generates the code that uses the output of a parent node to set the
+/// input of a child node. For transparent nodes, an equality comparison will
+/// be done between new output and the previous input, and a flag is raised if
+/// they don't match.
+fn generate_connection_processing_code(inputs: &[InputParam], is_transparent: bool) -> Vec<proc_macro2::TokenStream> {
+    let mut code = inputs.iter().map(|input| {
+        let clean_arg_name = &input.clean_name;
+        let arg_type = &input.type_;
+        
+        if is_transparent {
+            quote! {
+                #clean_arg_name => {
+                    let input_changed = node.input_changed();
+                    let output_val = parent.outputs_mut()
+                        .get(&output)
+                        .ok_or_else(|| anyhow::anyhow!("Output not found"))?
+                        .downcast_ref::<#arg_type>()
+                        .ok_or_else(|| anyhow::anyhow!("Type mismatch for output"))?
+                        .clone();
+                    
+                    match node.inputs_mut().get(&input) {
+                        Some(input_val) => {
+                            let input_val = input_val
+                                .downcast_ref::<#arg_type>()
+                                .ok_or_else(|| anyhow::anyhow!("Type mismatch for input"))?;
+                            if !input_changed && input_val != &output_val {
+                                node.set_input_changed(true);
+                            }
+                        },
+                        None => {
+                            node.set_input_changed(true);
+                        }
+                    }
+
+                    node.inputs_mut().insert(input, Box::new(output_val));
+                    Ok(())
+                }
+            }
+        } else {
+            quote! {
+                #clean_arg_name => {
+                    let input_changed = node.input_changed();
+                    let output_val = parent.outputs_mut()
+                        .remove(&output)
+                        .ok_or_else(|| anyhow::anyhow!("Output not found"))?
+                        .downcast::<#arg_type>()
+                        .map_err(|_| anyhow::anyhow!("Type mismatch for output"))?;
+                    
+                    node.inputs_mut().insert(input, Box::new(output_val));
+                    Ok(())
+                }
+            }
+        }
+    }).collect::<Vec<_>>();
+    
+    // Add the default case
+    code.push(quote! {
+        name => Err(anyhow::anyhow!("Unexpected node name: {}", name))
+    });
+    
+    code
+}
+
+/// Functions that return a NodeOutput are used as-is, where as functions
+/// that return anything else are wrapped in a simple MultOutput (simple
+/// in that it contains only 1 output named '_')
+fn generate_output_handling(config: &StageConfig) -> proc_macro2::TokenStream {
+    let arg_names = config.inputs.iter().map(|input| &input.name);
+    
+    if config.is_multi_output() {
+        quote! {
+            Ok(Self::get_fn()(#(#arg_names),*))
+        }
+    } else {
+        quote! {
+            Ok(directed::NodeOutput::new_simple(Self::get_fn()(#(#arg_names),*)))
+        }
+    }
+}
+
+/// The core trait that defines a stage - the culimnation of this macro
+fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
+    let original_fn = &config.original_fn;
+    let stage_name = &config.stage_name;
+    let fn_attrs = &original_fn.attrs;
+    let fn_vis = &original_fn.vis;
+    let original_args = &original_fn.sig.inputs;
+    let fn_return_type = &original_fn.sig.output;
+    let original_body = &original_fn.block;
+    
+    // Generate code sections
+    let input_registrations = generate_input_registrations(&config.inputs);
+    let output_registrations = generate_output_registrations(&config.outputs);
+    let extraction_code = generate_extraction_code(&config.inputs, config.is_transparent);
+    let connection_processing_code = generate_connection_processing_code(&config.inputs, config.is_transparent);
+    let output_handling = generate_output_handling(&config);
+    
+    // Determine evaluation strategy and reevaluation rule
+    let eval_strategy = if config.is_lazy {
+        quote! { directed::EvalStrategy::Lazy }
+    } else {
+        quote! { directed::EvalStrategy::Urgent }
+    };
+    
+    let reevaluation_rule = if config.is_transparent {
+        quote! { directed::ReevaluationRule::Transparent }
+    } else {
+        quote! { directed::ReevaluationRule::Opaque }
+    };
+
+    // The coup de grace
+    quote! {
+        // Create a struct implementing the Stage trait
+        #[derive(Clone)]
+        #fn_vis struct #stage_name {
+            inputs: std::collections::HashMap<directed::DataLabel, std::any::TypeId>,
+            outputs: std::collections::HashMap<directed::DataLabel, std::any::TypeId>,
+        }
+        
+        impl #stage_name {
+            pub fn new() -> Self {
+                let mut inputs = std::collections::HashMap::new();
+                let mut outputs = std::collections::HashMap::new();
+                #(#input_registrations)*
+                #(#output_registrations)*
+                Self { inputs, outputs }
+            }
+        }
+        
+        impl directed::Stage for #stage_name {
+            // TODO: Actually implement state
+            type State = ();
+            type BaseFn = fn(#original_args) #fn_return_type;
+            
+            fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, std::any::TypeId> {
+                &self.inputs
+            }
+            
+            fn outputs(&self) -> &std::collections::HashMap<directed::DataLabel, std::any::TypeId> {
+                &self.outputs
+            }
+            
+            fn evaluate(&self, _: &mut Option<Self::State>, inputs: &mut std::collections::HashMap<directed::DataLabel, Box<dyn std::any::Any>>) -> anyhow::Result<directed::NodeOutput> {
+                // Extract inputs
+                #(#extraction_code)*
+                
+                // Process outputs
+                #output_handling
+            }
+
+            fn eval_strategy(&self) -> directed::EvalStrategy {
+                #eval_strategy
+            }
+            
+            fn reeval_rule(&self) -> directed::ReevaluationRule {
+                #reevaluation_rule
+            }
+
+            fn process_connection(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                match input.inner() {
+                    #(#connection_processing_code)*
+                }
+            }
+
+            fn get_fn() -> Self::BaseFn {
+                #(#fn_attrs)*
+                fn original_fn(#original_args) #fn_return_type #original_body
+                return original_fn;
+            }
+        }
+    }
+}

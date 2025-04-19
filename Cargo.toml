@@ -1,0 +1,3 @@
+[workspace]
+members = [ "directed", "directed-macros" ]
+resolver = "3"
