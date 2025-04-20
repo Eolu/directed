@@ -425,7 +425,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         CacheStrategy::All => todo!(), // TODO: Handle CacheAll extraction
     };
     let opaque_connection_processing_code = generate_connection_processing_code_move(&config.inputs);
-    let transparent_connection_processing_code = generate_connection_processing_code_move(&config.inputs);
+    let transparent_connection_processing_code = generate_connection_processing_code_cache_last(&config.inputs);
     // TODO: Handle CacheAll connection processing
     let output_handling = generate_output_handling(&config);
     
@@ -492,7 +492,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
             }
 
             // TODO: This got unruly and can be simplified
-            fn process_connection(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
                 fn process_opaque_connection(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
                     match input.inner() {
                         #(#opaque_connection_processing_code)*

@@ -148,7 +148,7 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
         input: DataLabel,
     ) -> Result<(), anyhow::Error> {
         let stage_clone = self.stage.clone();
-        stage_clone.process_connection(self, parent, output, input)
+        stage_clone.inject_input(self, parent, output, input)
     }
 
     fn inputs_mut(&mut self) -> &mut HashMap<DataLabel, Box<dyn Any>> {

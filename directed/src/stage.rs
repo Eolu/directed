@@ -33,7 +33,7 @@ pub trait Stage: Clone {
 
     /// Stage-level connection processing logic. See [Node::flow_data] for more
     /// information.  
-    fn process_connection(
+    fn inject_input(
         &self,
         node: &mut Node<Self>,
         parent: &mut Box<dyn AnyNode>,

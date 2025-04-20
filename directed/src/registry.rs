@@ -1,7 +1,7 @@
 //! The registry is the "global" store of logic and state. 
 use anyhow::anyhow;
 use slab::Slab;
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 
 use crate::{
     node::{AnyNode, Node},
