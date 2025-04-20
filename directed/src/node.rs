@@ -3,11 +3,12 @@ use anyhow::anyhow;
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
+    sync::Arc
 };
 
 use crate::{
     stage::{EvalStrategy, ReevaluationRule, Stage},
-    types::{DataLabel, NodeOutput},
+    types::{DataLabel, NodeOutput}, RefType,
 };
 
 /// Used for single-output functions
@@ -23,8 +24,8 @@ pub struct Node<S: Stage> {
     // Arbitrary state, by default will be (). Can be used to make nodes even 
     // MORE stateful.
     pub(super) state: Option<S::State>,
-    pub(super) inputs: HashMap<DataLabel, Box<dyn Any>>,
-    pub(super) outputs: HashMap<DataLabel, Box<dyn Any>>,
+    pub(super) inputs: HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
+    pub(super) outputs: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
     pub(super) input_changed: bool,
 }
 
@@ -49,7 +50,7 @@ pub trait AnyNode: Any {
     /// Primarily used for internal checks
     fn as_any(&self) -> &dyn Any;
     /// Evaluates the node. Returns a map of prior outputs
-    fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Box<dyn Any>>>;
+    fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>>;
     fn eval_strategy(&self) -> EvalStrategy;
     fn reeval_rule(&self) -> ReevaluationRule;
     /// Set the outputs and return any existing outputs.
@@ -57,8 +58,8 @@ pub trait AnyNode: Any {
     fn replace_output(
         &mut self,
         key: &DataLabel,
-        output: Box<dyn Any>,
-    ) -> anyhow::Result<Option<Box<dyn Any>>>;
+        output: Arc<dyn Any + Send + Sync>,
+    ) -> anyhow::Result<Option<Arc<dyn Any + Send + Sync>>>;
     /// This a a core part of the plumbing of this crate - take the outputs of
     /// a parent node and use them to set the inputs of a child node.
     fn flow_data(
@@ -68,9 +69,11 @@ pub trait AnyNode: Any {
         input: DataLabel,
     ) -> Result<(), anyhow::Error>;
     /// Used to support `[Self::flow_data]`
-    fn inputs_mut(&mut self) -> &mut HashMap<DataLabel, Box<dyn Any>>;
+    fn inputs_mut(&mut self) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>;
     /// Used to support `[Self::flow_data]`
-    fn outputs_mut(&mut self) -> &mut HashMap<DataLabel, Box<dyn Any>>;
+    fn outputs_mut(&mut self) -> &mut HashMap<DataLabel, Arc<dyn Any + Send + Sync>>;
+    /// Look of the reftype of a particular input
+    fn input_reftype(&self, name: &DataLabel) -> Option<RefType>;
     /// Used to indicate that an input has been modified from a previous run.
     fn set_input_changed(&mut self, val: bool);
     /// See `[Self::set_input_changed]`
@@ -97,8 +100,8 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
     fn replace_output(
         &mut self,
         key: &DataLabel,
-        output: Box<dyn Any>,
-    ) -> anyhow::Result<Option<Box<dyn Any>>> {
+        output: Arc<dyn Any + Send + Sync>,
+    ) -> anyhow::Result<Option<Arc<dyn Any + Send + Sync>>> {
         let output_type = self
             .stage
             .outputs()
@@ -119,7 +122,7 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
         }
     }
 
-    fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Box<dyn Any>>> {
+    fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>> {
         let mut old_outputs = HashMap::new();
         // TODO: This stage clone is silly spaghetti
         let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs)?;
@@ -151,11 +154,11 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
         stage_clone.inject_input(self, parent, output, input)
     }
 
-    fn inputs_mut(&mut self) -> &mut HashMap<DataLabel, Box<dyn Any>> {
+    fn inputs_mut(&mut self) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)> {
         &mut self.inputs
     }
 
-    fn outputs_mut(&mut self) -> &mut HashMap<DataLabel, Box<dyn Any>> {
+    fn outputs_mut(&mut self) -> &mut HashMap<DataLabel, Arc<dyn Any + Send + Sync>> {
         &mut self.outputs
     }
 
@@ -165,5 +168,9 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
 
     fn input_changed(&self) -> bool {
         self.input_changed
+    }
+    
+    fn input_reftype(&self, name: &DataLabel) -> Option<RefType> {
+        self.stage.inputs().get(name).map(|input| input.1)
     }
 }

@@ -1,9 +1,16 @@
-use std::{any::TypeId, collections::HashMap};
+use std::{any::{Any, TypeId}, collections::HashMap, sync::Arc};
 
 use crate::{
     node::{AnyNode, Node},
     types::{DataLabel, NodeOutput},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub enum RefType {
+    Owned,
+    Borrowed,
+    BorrowedMut
+}
 
 /// Defines all the information about how a stage is handled.
 pub trait Stage: Clone {
@@ -12,15 +19,15 @@ pub trait Stage: Clone {
     /// The base function for this stage
     type BaseFn;
 
-    /// Used for typechecking inputs
-    fn inputs(&self) -> &HashMap<DataLabel, TypeId>;
+    /// Used for typechecking inputs.
+    fn inputs(&self) -> &HashMap<DataLabel, (TypeId, RefType)>;
     /// Used for typechecking outputs
     fn outputs(&self) -> &HashMap<DataLabel, TypeId>;
     /// Evaluate the stage with the given input and state
     fn evaluate(
         &self,
         state: &mut Option<Self::State>,
-        inputs: &mut HashMap<DataLabel, Box<dyn std::any::Any>>,
+        inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
     ) -> anyhow::Result<NodeOutput>;
 
     fn eval_strategy(&self) -> EvalStrategy {
@@ -41,6 +48,7 @@ pub trait Stage: Clone {
         input: DataLabel,
     ) -> Result<(), anyhow::Error>;
 
+    /// Pointer to the function this wraps
     fn get_fn() -> Self::BaseFn;
 }
 
@@ -52,22 +60,6 @@ pub enum EvalStrategy {
     /// for anything to execute at all.
     Urgent,
 }
-
-// TODO: Remove this dead code
-// /// TODO: Plan to change this to the following variants:
-// ///     - Move: Always move outputs, reevaluate every time
-// ///     - CacheLast: If all inputs == previous inputs, don't evalueate and 
-// ///                  return cloned output
-// ///     - CacheAll: If all inputs == ANMY previous set of inputs, don't
-// ///                 evaluate and return cloned output associated with those 
-// ///                 inputs
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub enum ReevaluationRule {
-//     /// Never reevaluate unless input differs, used cached outputs if input is the same.
-//     Transparent,
-//     /// Always reevaluate, even if inputs are unmodified.
-//     Opaque,
-// }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReevaluationRule {
@@ -81,6 +73,5 @@ pub enum ReevaluationRule {
     /// If all inputs are equal to ANY previous input combination, don't 
     /// evaluate and just return a clone of the cached output associated with
     /// that exact set of inputs.
-    // TODO: Currently unimplemented
     CacheAll,
 }

@@ -23,10 +23,10 @@ macro_rules! graph {
     // Handle explicitly named inputs and outputs
     (nodes: $nodes:expr, connections: { $($left_node:expr => $output:expr => $input:expr => $right_node:expr,)* }) => {
         {
-            let mut graph = Graph::from_node_indices($nodes);
+            let mut graph = directed::Graph::from_node_indices($nodes);
             loop {
                 $(
-                    if let Err(e) = graph.connect($left_node, $right_node, $output, $input)
+                    if let Err(e) = graph.connect($left_node, $right_node, directed::DataLabel::new($output), directed::DataLabel::new($input))
                     {
                         break Err(e);
                     }
@@ -86,8 +86,8 @@ impl Graph {
         &mut self,
         from_id: usize,
         to_id: usize,
-        output_name: &str,
-        input_name: &str,
+        source_output: DataLabel,
+        target_input: DataLabel,
     ) -> anyhow::Result<()> {
         let from_idx = self
             .node_indices
@@ -102,8 +102,8 @@ impl Graph {
                 *from_idx,
                 *to_idx,
                 EdgeInfo {
-                    source_output: DataLabel::new(output_name),
-                    target_input: DataLabel::new(input_name),
+                    source_output,
+                    target_input,
                 },
             )
             .map_err(|e| anyhow::anyhow!("Failed to add edge: {:?}", e))?;

@@ -14,7 +14,7 @@ pub use directed_stage_macro::stage;
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Node};
 pub use registry::Registry;
-pub use stage::{EvalStrategy, ReevaluationRule, Stage};
+pub use stage::{EvalStrategy, ReevaluationRule, Stage, RefType};
 pub use types::{DataLabel, NodeOutput};
 
 // TODO: Add a traceable error system, right now it's ignored with anyhow
@@ -30,14 +30,19 @@ pub use types::{DataLabel, NodeOutput};
 //       If we could istead combine STAGES with graphs, then output a valid registry full of nodes
 //       based on that combination, it would avoid the possibility of combining a registry with an 
 //       invalid graph entirely. DO THIS!
-// TODO: "connection processing" should be renamed to "input injection"
+// TODO: Opaque outputs can have multiple children but must be eval'd for each one
+
+// t_out -> o_in (ref)     = just pass ref in wrapper
+// o_out -> o_in (ref)     = pass in then drop after
+// any -> t_in (ref)       = ERROR
+// DONE: o_out -> o/t_in (owned) = move
+// DONE: t_out -> o/t_in (owned) = clone in wrapper then move clone in
 
 #[cfg(test)]
 mod tests {
     extern crate self as directed;
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
 
     // Basic test already included in the original code
@@ -181,10 +186,10 @@ mod tests {
         }
 
         #[stage]
-        fn SinkStage(t_input: i32, o_input: i32) {
+        fn SinkStage(t_input: &i32, o_input: &i32) {
             println!("SinkStage");
-            assert_eq!(t_input, 84);
-            assert_eq!(o_input, 126);
+            assert_eq!(*t_input, 84);
+            assert_eq!(*o_input, 126);
         }
 
         let mut registry = Registry::new();
@@ -499,7 +504,8 @@ mod tests {
     // Test the output! macro
     #[test]
     fn output_macro_test() {
-        #[stage(out(number: i32, text: String, vector: Vec<i32>))]
+        // TODO: This should also pass without cache_last
+        #[stage(cache_last, out(number: i32, text: String, vector: Vec<i32>))]
         fn ProduceOutput1() -> NodeOutput {
             let number = 42;
             let text = "hello".to_string();

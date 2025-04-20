@@ -48,9 +48,26 @@ struct StageConfig {
     inputs: Vec<InputParam>,
 }
 
+enum RefType {
+    Owned,
+    Borrowed,
+    BorrowedMut
+}
+
+impl RefType {
+    fn quoted(&self) -> proc_macro2::TokenStream {
+        match self {
+            RefType::Owned => quote!{ directed::RefType::Owned },
+            RefType::Borrowed => quote!{ directed::RefType::Borrowed },
+            RefType::BorrowedMut => quote!{ directed::RefType::BorrowedMut },
+        }
+    }
+} 
+
 struct InputParam {
     name: syn::Ident,
     type_: Type,
+    ref_type: RefType,
     // TODO: This should be used to to prevent handling unused params
     is_unused: bool,
     clean_name: String,
@@ -185,10 +202,17 @@ impl StageConfig {
                     } else {
                         arg_name_str.clone()
                     };
+
+                    let ref_type = match &**arg_type {
+                        Type::Reference(type_reference) if type_reference.mutability.is_some() => RefType::BorrowedMut,
+                        Type::Reference(_) => RefType::Borrowed,
+                        _ => RefType::Owned,
+                    };
                     
                     result.push(InputParam {
                         name: arg_name.clone(),
                         type_: *arg_type.clone(),
+                        ref_type,
                         is_unused,
                         clean_name,
                     });
@@ -246,9 +270,10 @@ fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::Token
     inputs.iter().map(|input| {
         let arg_name = &input.clean_name;
         let arg_type = &input.type_;
+        let ref_type = input.ref_type.quoted();
         
         quote! {
-            inputs.insert(directed::DataLabel::new(#arg_name), std::any::TypeId::of::<#arg_type>());
+            inputs.insert(directed::DataLabel::new(#arg_name), (std::any::TypeId::of::<#arg_type>(), #ref_type));
         }
     }).collect()
 }
@@ -267,20 +292,30 @@ fn generate_output_registrations(outputs: &[(String, Type)]) -> Vec<proc_macro2:
     }).collect()
 }
 
+/// Get a type, squash the &
+fn true_type(ty: &syn::Type) -> &syn::Type {
+    if let syn::Type::Reference(ty) = ty {
+        &*ty.elem
+    } else {
+        ty
+    }
+}
+
 /// This code is used by the wrapper function - it downcasts type-erased
 /// function parameters so that the user-facing function can be called with
 /// concrete types.
 fn generate_extraction_code_move(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
     inputs.iter().map(|input| {
         let arg_name = &input.name;
-        let arg_type = &input.type_;
+        let arg_type = true_type(&input.type_);
         let clean_arg_name = &input.clean_name;
+        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
         
         quote! {
             // Non-transparent functions never clone, always move
-            let #arg_name: #arg_type = if let Some(input) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
-                match input.downcast::<Box<#arg_type>>() {
-                    Ok(val) => **val,
+            let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
+                match std::sync::Arc::downcast::<#arg_type>(input) {
+                    Ok(val) => (val, reeval_rule),
                     Err(_) => return Err(anyhow::anyhow!("Type mismatch for input {}, expected: {}", 
                                                          #clean_arg_name, stringify!(#arg_type)))
                 }
@@ -294,15 +329,15 @@ fn generate_extraction_code_move(inputs: &[InputParam]) -> Vec<proc_macro2::Toke
 fn generate_extraction_code_cache_last(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
     inputs.iter().map(|input| {
         let arg_name = &input.name;
-        let arg_type = &input.type_;
+        let arg_type = true_type(&input.type_);
         let clean_arg_name = &input.clean_name;
+        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
         
-        // TODO: This could be done without cloning inputs - just pass by ref!
         quote! {
-            let #arg_name: #arg_type = if let Some(input) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
-                match input.downcast_ref::<#arg_type>() {
-                    Some(val) => val.clone(),
-                    None => return Err(anyhow::anyhow!("Type mismatch for input {}, expected: {}", 
+            let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
+                match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
+                    Ok(val) => (val, *reeval_rule),
+                    Err(_) => return Err(anyhow::anyhow!("Type mismatch for input {}, expected: {}", 
                                                        #clean_arg_name, stringify!(#arg_type)))
                 }
             } else {
@@ -314,7 +349,7 @@ fn generate_extraction_code_cache_last(inputs: &[InputParam]) -> Vec<proc_macro2
 
 /// This generates the code that uses the output of a parent node to set the
 /// input of a child node. This function is for moves only.
-fn generate_connection_processing_code_move(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
+fn inject_opaque_out(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
     let mut code = inputs.iter().map(|input| {
         let clean_arg_name = &input.clean_name;
         let arg_type = &input.type_;
@@ -324,11 +359,10 @@ fn generate_connection_processing_code_move(inputs: &[InputParam]) -> Vec<proc_m
                 let input_changed = node.input_changed();
                 let output_val = parent.outputs_mut()
                     .remove(&output)
-                    .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?
-                    .downcast::<#arg_type>()
+                    .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?;
+                let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
                     .map_err(|_| anyhow::anyhow!("Type mismatch for output"))?;
-                println!("GOT OUTPUT: {output:?}: {output_val:?}");
-                node.inputs_mut().insert(input, Box::new(output_val));
+                node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::Move));
                 Ok(())
             }
         }
@@ -345,7 +379,7 @@ fn generate_connection_processing_code_move(inputs: &[InputParam]) -> Vec<proc_m
 /// This generates the code that uses the output of a parent node to set the
 /// input of a child node. An equality comparison will be done between new 
 /// output and the previous input, and a flag is raised if they don't match.
-fn generate_connection_processing_code_cache_last(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
+fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
     let mut code = inputs.iter().map(|input| {
         let clean_arg_name = &input.clean_name;
         let arg_type = &input.type_;
@@ -356,16 +390,16 @@ fn generate_connection_processing_code_cache_last(inputs: &[InputParam]) -> Vec<
                 let output_val = parent.outputs_mut()
                     .get(&output)
                     .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?
-                    .downcast_ref::<#arg_type>()
-                    .ok_or_else(|| anyhow::anyhow!("Type mismatch for output"))?
-                    .clone();
+                    .clone(); // Clone th Arc
+                let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
+                    .map_err(|_| anyhow::anyhow!("Type mismatch for output"))?;
                 
                 match node.inputs_mut().get(&input) {
-                    Some(input_val) => {
+                    Some((input_val, _)) => {
                         let input_val = input_val
                             .downcast_ref::<#arg_type>()
                             .ok_or_else(|| anyhow::anyhow!("Type mismatch for input"))?;
-                        if !input_changed && input_val != &output_val {
+                        if !input_changed && output_val.as_ref() != input_val {
                             node.set_input_changed(true);
                         }
                     },
@@ -374,7 +408,49 @@ fn generate_connection_processing_code_cache_last(inputs: &[InputParam]) -> Vec<
                     }
                 }
 
-                node.inputs_mut().insert(input, Box::new(output_val));
+                node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::CacheLast));
+                Ok(())
+            }
+        }
+    }).collect::<Vec<_>>();
+    
+    // Add the default case
+    code.push(quote! {
+        name => Err(anyhow::anyhow!("Unexpected node name: {}", name))
+    });
+    
+    code
+}
+
+fn inject_transparent_out_to_opaque_ref_in(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
+    let mut code = inputs.iter().map(|input| {
+        let clean_arg_name = &input.clean_name;
+        let arg_type = &input.type_;
+        
+        quote! {
+            #clean_arg_name => {
+                let input_changed = node.input_changed();
+                let output_val_arc = parent.outputs_mut()
+                    .get(&output)
+                    .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?;
+                let output_val_ref = std::sync::Arc::downcast::<#arg_type>(output_val_arc.clone())
+                    .map_err(|_| anyhow::anyhow!("Type mismatch for output"))?;
+                
+                match node.inputs_mut().get(&input) {
+                    Some((input_val, _)) => {
+                        let input_val = input_val
+                            .downcast_ref::<#arg_type>()
+                            .ok_or_else(|| anyhow::anyhow!("Type mismatch for input"))?;
+                        if !input_changed && input_val != &*output_val_ref {
+                            node.set_input_changed(true);
+                        }
+                    },
+                    None => {
+                        node.set_input_changed(true);
+                    }
+                }
+
+                node.inputs_mut().insert(input, (std::sync::Arc::new(output_val_ref), directed::ReevaluationRule::CacheLast));
                 Ok(())
             }
         }
@@ -393,7 +469,6 @@ fn generate_connection_processing_code_cache_last(inputs: &[InputParam]) -> Vec<
 /// in that it contains only 1 output named '_')
 fn generate_output_handling(config: &StageConfig) -> proc_macro2::TokenStream {
     let arg_names = config.inputs.iter().map(|input| &input.name);
-    
     if config.is_multi_output() {
         quote! {
             Ok(Self::get_fn()(#(#arg_names),*))
@@ -403,6 +478,42 @@ fn generate_output_handling(config: &StageConfig) -> proc_macro2::TokenStream {
             Ok(directed::NodeOutput::new_simple(Self::get_fn()(#(#arg_names),*)))
         }
     }
+}
+
+fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
+    let args = config.inputs.iter().map(|input| (&input.name, &input.clean_name, &input.ref_type));
+    let mut output = Vec::new();
+    for (arg_name, clean_name, ref_type) in args {
+        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_name);
+        match ref_type {
+            RefType::Owned => {
+                output.push(quote!{
+                    let #arg_name = match #reeval_name {
+                        directed::ReevaluationRule::Move => {
+                            // Parent is opaque, use Arc::into_inner
+                            match std::sync::Arc::into_inner(#arg_name) {
+                                Some(arg) => arg,
+                                None => {return Err(anyhow::anyhow!("Unexpected references alive for: {}", stringify!(#arg_name)))}
+                            }
+                        },
+                        directed::ReevaluationRule::CacheLast => {
+                            // Parent is transparent, clone the value
+                            (*#arg_name).clone()
+                        },
+                        directed::ReevaluationRule::CacheAll => panic!("CacheAll is not yet implemented"),
+                    };
+                });
+            },
+            RefType::Borrowed => {
+                output.push(quote!{
+                    // TODO: if node is transparent (config.cache_strategy != None), error with a graceful message (rather than letting clone fail)
+                    let #arg_name = #arg_name.as_ref();
+                });
+            },
+            RefType::BorrowedMut => panic!("Mutable refs are not yet supported"),
+        }
+    }
+    output
 }
 
 /// The core trait that defines a stage - the culimnation of this macro
@@ -418,15 +529,17 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     // Generate code sections
     let input_registrations = generate_input_registrations(&config.inputs);
     let output_registrations = generate_output_registrations(&config.outputs);
+    // TODO: This is wonked up! 
     let extraction_code = match config.cache_strategy
     {
         CacheStrategy::None => generate_extraction_code_move(&config.inputs),
         CacheStrategy::Last => generate_extraction_code_cache_last(&config.inputs),
         CacheStrategy::All => todo!(), // TODO: Handle CacheAll extraction
     };
-    let opaque_connection_processing_code = generate_connection_processing_code_move(&config.inputs);
-    let transparent_connection_processing_code = generate_connection_processing_code_cache_last(&config.inputs);
-    // TODO: Handle CacheAll connection processing
+    let inject_opaque_out_code = inject_opaque_out(&config.inputs);
+    let inject_transparent_out_to_owned_in_code = inject_transparent_out_to_owned_in(&config.inputs);
+    let inject_transparent_out_to_opaque_ref_in_code = inject_transparent_out_to_opaque_ref_in(&config.inputs);
+    let prepare_input_types_code = prepare_input_types(&config);
     let output_handling = generate_output_handling(&config);
     
     // Determine evaluation strategy and reevaluation rule
@@ -436,11 +549,10 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         quote! { directed::EvalStrategy::Urgent }
     };
     
-    // TODO: Handle CacheAll
-    let reevaluation_rule = if config.cache_strategy != CacheStrategy::None {
-        quote! { directed::ReevaluationRule::CacheLast }
-    } else {
-        quote! { directed::ReevaluationRule::Move }
+    let reevaluation_rule = match config.cache_strategy {
+        CacheStrategy::None => quote! { directed::ReevaluationRule::Move },
+        CacheStrategy::Last => quote! { directed::ReevaluationRule::CacheLast },
+        CacheStrategy::All => todo!() //quote! { directed::ReevaluationRule::CacheAll },
     };
 
     // The coup de grace
@@ -448,7 +560,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         // Create a struct implementing the Stage trait
         #[derive(Clone)]
         #fn_vis struct #stage_name {
-            inputs: std::collections::HashMap<directed::DataLabel, std::any::TypeId>,
+            inputs: std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)>,
             outputs: std::collections::HashMap<directed::DataLabel, std::any::TypeId>,
         }
         
@@ -467,7 +579,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
             type State = ();
             type BaseFn = fn(#original_args) #fn_return_type;
             
-            fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, std::any::TypeId> {
+            fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
                 &self.inputs
             }
             
@@ -475,11 +587,9 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 &self.outputs
             }
             
-            fn evaluate(&self, _: &mut Option<Self::State>, inputs: &mut std::collections::HashMap<directed::DataLabel, Box<dyn std::any::Any>>) -> anyhow::Result<directed::NodeOutput> {
-                // Extract inputs
+            fn evaluate(&self, _: &mut Option<Self::State>, inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>) -> anyhow::Result<directed::NodeOutput> {
                 #(#extraction_code)*
-                
-                // Process outputs
+                #(#prepare_input_types_code)*
                 #output_handling
             }
 
@@ -493,21 +603,31 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
 
             // TODO: This got unruly and can be simplified
             fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
-                fn process_opaque_connection(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
                     match input.inner() {
-                        #(#opaque_connection_processing_code)*
+                        #(#inject_opaque_out_code)*
                     }
                 }
-                fn process_transparent_connection(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                fn inject_transparent_out_to_owned_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
                     match input.inner() {
-                        #(#transparent_connection_processing_code)*
+                        #(#inject_transparent_out_to_owned_in_code)*
+                    }
+                }
+                fn inject_transparent_out_to_opaque_ref_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                    match input.inner() {
+                        #(#inject_transparent_out_to_opaque_ref_in_code)*
                     }
                 }
 
+                // TODO: Handle opaque ref in, need a way to check ref
                 if parent.reeval_rule() == directed::ReevaluationRule::Move {
-                    process_opaque_connection(node, parent, output, input)
+                    if node.reeval_rule() == directed::ReevaluationRule::Move && node.input_reftype(&input) != Some(directed::RefType::Owned) {
+                        inject_transparent_out_to_opaque_ref_in(node, parent, output, input)
+                    } else {
+                        inject_opaque_out(node, parent, output, input)
+                    }
                 } else {
-                    process_transparent_connection(node, parent, output, input)
+                    inject_transparent_out_to_owned_in(node, parent, output, input)
                 }
             }
 
