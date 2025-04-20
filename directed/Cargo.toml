@@ -2,6 +2,8 @@
 name = "directed"
 version = "0.1.0"
 edition = "2024"
+description = "Evaluate programs based on Directed Acrylic Graphs"
+license = "MIT"
 
 [dependencies]
 directed-stage-macro = { version = "0.1.0", path = "../directed-stage-macro" }
