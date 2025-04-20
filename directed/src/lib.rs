@@ -26,6 +26,10 @@ pub use types::{DataLabel, NodeOutput};
 // TODO: Caching ALL possible input combinations, not just previous: transparent(cache_all)
 // TODO: A way to reset all registry state at once
 // TODO: A canon way to create a stage out of an entire graph
+//       Right now we combine nodes with stages to make the registry, and registries with graphs.
+//       If we could istead combine STAGES with graphs, then output a valid registry full of nodes
+//       based on that combination, it would avoid the possibility of combining a registry with an 
+//       invalid graph entirely. DO THIS!
 
 #[cfg(test)]
 mod tests {
