@@ -10,7 +10,7 @@ mod types;
 //    - Ability to create nodes from stages, and attach them and execute (without recompiling!)
 
 // TODO: Make sure public interface structure makes sense
-pub use directed_stage_macro::*;
+pub use directed_stage_macro::stage;
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Node};
 pub use registry::Registry;
@@ -30,6 +30,7 @@ pub use types::{DataLabel, NodeOutput};
 //       If we could istead combine STAGES with graphs, then output a valid registry full of nodes
 //       based on that combination, it would avoid the possibility of combining a registry with an 
 //       invalid graph entirely. DO THIS!
+// TODO: "connection processing" should be renamed to "input injection"
 
 #[cfg(test)]
 mod tests {
@@ -42,19 +43,19 @@ mod tests {
     // Basic test already included in the original code
     #[test]
     fn basic_macro_test() {
-        #[stage(lazy, transparent)]
+        #[stage(lazy, cache_last)]
         fn TinyStage1() -> String {
             println!("Running stage 1");
             String::from("This is the output!")
         }
 
-        #[stage(lazy, transparent)]
+        #[stage(lazy, cache_last)]
         fn TinyStage2(input: String, input2: String) -> String {
             println!("Running stage 2");
             input.to_uppercase() + &input2.to_lowercase()
         }
 
-        #[stage(transparent)]
+        #[stage(cache_last)]
         fn TinyStage3(input: String) {
             println!("Running stage 3");
             assert_eq!("THIS IS THE OUTPUT!this is the output!", input);
@@ -122,13 +123,13 @@ mod tests {
     fn lazy_and_urgent_eval_test() {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-        #[stage(lazy, transparent)]
+        #[stage(lazy, cache_last)]
         fn LazyStage() -> i32 {
             COUNTER.fetch_add(1, Ordering::SeqCst);
             42
         }
 
-        #[stage(transparent)]
+        #[stage(cache_last)]
         fn UrgentStage(input: i32) {
             assert_eq!(input, 42);
             assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
@@ -159,13 +160,13 @@ mod tests {
         static TRANSPARENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
         static OPAQUE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-        #[stage(lazy, transparent)]
+        #[stage(lazy, cache_last)]
         fn SourceStage() -> i32 {
             println!("SourceStage");
             42
         }
 
-        #[stage(lazy, transparent)]
+        #[stage(lazy, cache_last)]
         fn TransparentStage(input: i32) -> i32 {
             println!("TransparentStage");
             TRANSPARENT_COUNTER.fetch_add(1, Ordering::SeqCst);

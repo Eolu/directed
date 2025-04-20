@@ -186,8 +186,9 @@ impl Graph {
 
         // Determine if we need to evaluate
         let node = registry.get_mut(node_id)?;
-        if node.reeval_rule() == ReevaluationRule::Opaque || node.input_changed() {
+        if node.reeval_rule() == ReevaluationRule::Move || node.input_changed() {
             // TODO: Do something with the previous outputs, which are returned here
+            // TODO: Handle ReevaluationRule::CacheAll
             node.eval()?;
             node.set_input_changed(false);
         }

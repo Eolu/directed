@@ -10,6 +10,7 @@ use crate::{
     types::{DataLabel, NodeOutput},
 };
 
+/// Used for single-output functions
 pub(crate) const UNNAMED_OUTPUT_NAME: DataLabel = DataLabel::new_const("_");
 
 /// Every node wraps a Stage, which is a decorated function that has some
@@ -19,8 +20,8 @@ pub(crate) const UNNAMED_OUTPUT_NAME: DataLabel = DataLabel::new_const("_");
 #[derive(Debug)]
 pub struct Node<S: Stage> {
     pub(super) stage: S,
-    // Arbitrary state, by default wil be (). Can be used to make nodes even 
-    // MORE statefule.
+    // Arbitrary state, by default will be (). Can be used to make nodes even 
+    // MORE stateful.
     pub(super) state: Option<S::State>,
     pub(super) inputs: HashMap<DataLabel, Box<dyn Any>>,
     pub(super) outputs: HashMap<DataLabel, Box<dyn Any>>,

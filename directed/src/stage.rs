@@ -28,7 +28,7 @@ pub trait Stage: Clone {
     }
 
     fn reeval_rule(&self) -> ReevaluationRule {
-        ReevaluationRule::Transparent
+        ReevaluationRule::Move
     }
 
     /// Stage-level connection processing logic. See [Node::flow_data] for more
@@ -53,17 +53,34 @@ pub enum EvalStrategy {
     Urgent,
 }
 
-/// TODO: Plan to change this to the following variants:
-///     - Move: Always move outputs, reevaluate every time
-///     - CacheLast: If all inputs == previous inputs, don't evalueate and 
-///                  return cloned output
-///     - CacheAll: If all inputs == ANMY previous set of inputs, don't
-///                 evaluate and return cloned output associated with those 
-///                 inputs
+// TODO: Remove this dead code
+// /// TODO: Plan to change this to the following variants:
+// ///     - Move: Always move outputs, reevaluate every time
+// ///     - CacheLast: If all inputs == previous inputs, don't evalueate and 
+// ///                  return cloned output
+// ///     - CacheAll: If all inputs == ANMY previous set of inputs, don't
+// ///                 evaluate and return cloned output associated with those 
+// ///                 inputs
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// pub enum ReevaluationRule {
+//     /// Never reevaluate unless input differs, used cached outputs if input is the same.
+//     Transparent,
+//     /// Always reevaluate, even if inputs are unmodified.
+//     Opaque,
+// }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReevaluationRule {
-    /// Never reevaluate unless input differs, used cached outputs if input is the same.
-    Transparent,
-    /// Always reevaluate, even if inputs are unmodified.
-    Opaque,
+    /// Always move outputs, reevaluate every time. If the receiving node takes
+    /// a reference, it will be pased in, then dropped after that node
+    /// evaluates.
+    Move,
+    /// If all inputs are previous inputs, don't evaluate and just return a
+    /// clone of the cached output.
+    CacheLast,
+    /// If all inputs are equal to ANY previous input combination, don't 
+    /// evaluate and just return a clone of the cached output associated with
+    /// that exact set of inputs.
+    // TODO: Currently unimplemented
+    CacheAll,
 }
