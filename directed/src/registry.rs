@@ -28,14 +28,14 @@ impl Registry {
     pub fn validate_node_type<S: Stage + 'static>(&self, id: usize) -> anyhow::Result<()> {
         match self.0.get(id) {
             Some(node) => {
-                if node.type_id() != TypeId::of::<Node<S>>() {
-                    Err(anyhow!(
-                        "Attempted to unregister invalid node type: {}. Expected: {}",
-                        std::any::type_name::<Node<S>>(),
-                        std::any::type_name_of_val(&*node)
-                    ))
-                } else {
-                    Ok(())
+                match node.as_any().downcast_ref::<Node<S>>()
+                {
+                    Some(_) => Ok(()),
+                    None => Err(anyhow!(
+                        "Invalid node type: (id:{:?}). Expected: (id:{:?})",
+                        TypeId::of::<Node<S>>(),
+                        node.as_any().type_id()
+                    )),
                 }
             }
             None => Err(anyhow!("Node id {id} does not exist")),

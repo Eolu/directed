@@ -45,6 +45,8 @@ impl<S: Stage> Node<S> {
 pub trait AnyNode: Any {
     /// Upcast to `dyn Any` to get its more-specific downcast capabilities
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
+    /// Primarily used for internal checks
+    fn as_any(&self) -> &dyn Any;
     /// Evaluates the node. Returns a map of prior outputs
     fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Box<dyn Any>>>;
     fn eval_strategy(&self) -> EvalStrategy;
@@ -77,6 +79,10 @@ pub trait AnyNode: Any {
 impl<S: Stage + 'static> AnyNode for Node<S> {
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         Box::new(*self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self as &dyn Any
     }
 
     fn eval_strategy(&self) -> EvalStrategy {

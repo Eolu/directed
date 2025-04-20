@@ -56,7 +56,15 @@ struct InputParam {
     clean_name: String,
 }
 
-// Argument parsing structures
+#[derive(Clone)]
+struct Outputs(Punctuated<Output, Token![,]>);
+
+impl Parse for Outputs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Punctuated::parse_terminated(input).map(Self)
+    }
+}
+
 #[derive(Clone)]
 struct Output {
     name: syn::Ident,
@@ -74,7 +82,7 @@ impl Parse for Output {
 
 enum StageArg {
     Flag(syn::Ident),
-    Output(Output),
+    Output(Outputs),
 }
 
 impl Parse for StageArg {
@@ -127,8 +135,10 @@ impl StageConfig {
                         unknown => return Err(syn::Error::new(ident.span(), format!("Unrecognized attribute: {}", unknown))),
                     }
                 },
-                StageArg::Output(output) => {
-                    outputs.push((output.name.to_string(), output.ty.clone()));
+                StageArg::Output(output_defs) => {
+                    for output in &output_defs.0 {
+                        outputs.push((output.name.to_string(), output.ty.clone()));
+                    }
                 }
             }
         }
@@ -292,7 +302,9 @@ fn generate_extraction_code(inputs: &[InputParam], is_transparent: bool) -> Vec<
 /// input of a child node. For transparent nodes, an equality comparison will
 /// be done between new output and the previous input, and a flag is raised if
 /// they don't match.
+// TODO: The purpose of the bool has been lost, split this into 2 functions
 fn generate_connection_processing_code(inputs: &[InputParam], is_transparent: bool) -> Vec<proc_macro2::TokenStream> {
+    // TODO: Major bug here: We care if the parent is transparentm, NOT this node
     let mut code = inputs.iter().map(|input| {
         let clean_arg_name = &input.clean_name;
         let arg_type = &input.type_;
@@ -303,7 +315,7 @@ fn generate_connection_processing_code(inputs: &[InputParam], is_transparent: bo
                     let input_changed = node.input_changed();
                     let output_val = parent.outputs_mut()
                         .get(&output)
-                        .ok_or_else(|| anyhow::anyhow!("Output not found"))?
+                        .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?
                         .downcast_ref::<#arg_type>()
                         .ok_or_else(|| anyhow::anyhow!("Type mismatch for output"))?
                         .clone();
@@ -332,10 +344,10 @@ fn generate_connection_processing_code(inputs: &[InputParam], is_transparent: bo
                     let input_changed = node.input_changed();
                     let output_val = parent.outputs_mut()
                         .remove(&output)
-                        .ok_or_else(|| anyhow::anyhow!("Output not found"))?
+                        .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?
                         .downcast::<#arg_type>()
                         .map_err(|_| anyhow::anyhow!("Type mismatch for output"))?;
-                    
+                    println!("GOT OUTPUT: {output:?}: {output_val:?}");
                     node.inputs_mut().insert(input, Box::new(output_val));
                     Ok(())
                 }
@@ -382,7 +394,8 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     let input_registrations = generate_input_registrations(&config.inputs);
     let output_registrations = generate_output_registrations(&config.outputs);
     let extraction_code = generate_extraction_code(&config.inputs, config.is_transparent);
-    let connection_processing_code = generate_connection_processing_code(&config.inputs, config.is_transparent);
+    let opaque_connection_processing_code = generate_connection_processing_code(&config.inputs, false);
+    let transparent_connection_processing_code = generate_connection_processing_code(&config.inputs, true);
     let output_handling = generate_output_handling(&config);
     
     // Determine evaluation strategy and reevaluation rule
@@ -446,9 +459,23 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 #reevaluation_rule
             }
 
+            // TODO: This got unruly and can be simplified
             fn process_connection(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
-                match input.inner() {
-                    #(#connection_processing_code)*
+                fn process_opaque_connection(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                    match input.inner() {
+                        #(#opaque_connection_processing_code)*
+                    }
+                }
+                fn process_transparent_connection(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                    match input.inner() {
+                        #(#transparent_connection_processing_code)*
+                    }
+                }
+
+                if parent.reeval_rule() == directed::ReevaluationRule::Opaque {
+                    process_opaque_connection(node, parent, output, input)
+                } else {
+                    process_transparent_connection(node, parent, output, input)
                 }
             }
 

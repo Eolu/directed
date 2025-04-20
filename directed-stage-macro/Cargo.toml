@@ -1,5 +1,5 @@
 [package]
-name = "directed-macros"
+name = "directed-stage-macro"
 version = "0.1.0"
 edition = "2024"
 
