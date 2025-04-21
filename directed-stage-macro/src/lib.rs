@@ -71,8 +71,6 @@ struct InputParam {
     name: syn::Ident,
     type_: Type,
     ref_type: RefType,
-    // TODO: This should be used to to prevent handling unused params
-    is_unused: bool,
     clean_name: String,
 }
 
@@ -233,7 +231,6 @@ impl StageConfig {
                         name: arg_name.clone(),
                         type_: *arg_type.clone(),
                         ref_type,
-                        is_unused,
                         clean_name,
                     });
                 }

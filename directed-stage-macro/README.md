@@ -1,3 +1,3 @@
-# TODO
+# directed-stage-macro
 
-This crate is WIP. More detailed updates and docs will come soon.
+See the [`directed`](https://crates.io/crates/directed) crate.

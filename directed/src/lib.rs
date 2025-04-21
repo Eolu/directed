@@ -66,9 +66,9 @@ mod tests {
         let graph = graph! {
             nodes: &[node_1, node_2, node_3],
             connections: {
-                node_1 => "_" => "input" => node_2,
-                node_1 => "_" => "input2" => node_2,
-                node_2 => "_" => "input" => node_3,
+                node_1: _ => node_2: input,
+                node_1: _ => node_2: input2,
+                node_2: _ => node_3: input,
             }
         }
         .unwrap();
@@ -107,8 +107,8 @@ mod tests {
         let graph = graph! {
             nodes: &[producer, consumer1, consumer2],
             connections: {
-                producer => "number" => "number" => consumer1,
-                producer => "text" => "text" => consumer2,
+                producer: number => consumer1: number,
+                producer: text => consumer2: text,
             }
         }
         .unwrap();
@@ -140,7 +140,7 @@ mod tests {
         let graph = graph! {
             nodes: &[lazy_node, urgent_node],
             connections: {
-                lazy_node => "_" => "input" => urgent_node,
+                lazy_node: _ => urgent_node: input,
             }
         }
         .unwrap();
@@ -194,10 +194,10 @@ mod tests {
         let graph = graph! {
             nodes: &[source, transparent, opaque, sink],
             connections: {
-                source => "_" => "input" => transparent,
-                source => "_" => "input" => opaque,
-                transparent => "_" => "t_input" => sink,
-                opaque => "_" => "o_input" => sink,
+                source: _ => transparent: input,
+                source: _ => opaque: input,
+                transparent: _ => sink: t_input,
+                opaque: _ => sink: o_input,
             }
         }
         .unwrap();
@@ -238,8 +238,8 @@ mod tests {
         let result = graph! {
             nodes: &[node_a, node_b],
             connections: {
-                node_a => "_" => "input" => node_b,
-                node_b => "_" => "input" => node_a,
+                node_a: _ => node_b: input,
+                node_b: _ => node_a: input,
             }
         };
 
@@ -323,7 +323,7 @@ mod tests {
         let graph = graph! {
             nodes: &[producer, consumer],
             connections: {
-                producer => "_" => "input" => consumer,
+                producer: _ => consumer: input,
             }
         }
         .unwrap();
@@ -355,7 +355,7 @@ mod tests {
         let graph = graph! {
             nodes: &[producer, consumer],
             connections: {
-                producer => "_" => "input1" => consumer,
+                producer: _ => consumer: input1,
             }
         }
         .unwrap();
@@ -402,7 +402,7 @@ mod tests {
         let graph = graph! {
             nodes: &[node1, node2],
             connections: {
-                node1 => "_" => "input" => node2,
+                node1: _ => node2: input,
             }
         }
         .unwrap();
@@ -445,10 +445,10 @@ mod tests {
         let graph = graph! {
             nodes: &[source, path_a, path_b, sink],
             connections: {
-                source => "_" => "input" => path_a,
-                source => "_" => "input" => path_b,
-                path_a => "_" => "a" => sink,
-                path_b => "_" => "b" => sink,
+                source: _ => path_a: input,
+                source: _ => path_b: input,
+                path_a: _ => sink: a,
+                path_b: _ => sink: b,
             }
         }
         .unwrap();
@@ -481,7 +481,7 @@ mod tests {
         let graph = graph! {
             nodes: &[producer, consumer],
             connections: {
-                producer => "nonexistent" => "input" => consumer,
+                producer: nonexistent => consumer: input,
             }
         }
         .unwrap();
@@ -550,9 +550,9 @@ mod tests {
         let graph = graph! {
             nodes: &[producer, consumer],
             connections: {
-                producer => "number" => "num" => consumer,
-                producer => "text" => "txt" => consumer,
-                producer => "vector" => "vec" => consumer,
+                producer: number => consumer: num,
+                producer: text => consumer: txt,
+                producer: vector => consumer: vec,
             }
         }
         .unwrap();

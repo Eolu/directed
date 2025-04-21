@@ -21,13 +21,13 @@ use crate::{
 #[macro_export]
 macro_rules! graph {
     // Handle explicitly named inputs and outputs
-    (nodes: $nodes:expr, connections: { $($left_node:expr => $output:expr => $input:expr => $right_node:expr,)* }) => {
+    (nodes: $nodes:expr, connections: { $($left_node:ident: $output:expr => $right_node:ident: $input:expr,)* }) => {
         {
             #[allow(unused_mut)]
             let mut graph = directed::Graph::from_node_indices($nodes);
             loop {
                 $(
-                    if let Err(e) = graph.connect($left_node, $right_node, directed::DataLabel::new($output), directed::DataLabel::new($input))
+                    if let Err(e) = graph.connect($left_node, $right_node, directed::DataLabel::new_const(stringify!($output)), directed::DataLabel::new_const(stringify!($input)))
                     {
                         break Err(e);
                     }
