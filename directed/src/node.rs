@@ -50,6 +50,8 @@ pub trait AnyNode: Any {
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
     /// Primarily used for internal checks
     fn as_any(&self) -> &dyn Any;
+    /// USed to get mutable access to state
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     /// Evaluates the node. Returns a map of prior outputs
     fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>>;
     fn eval_strategy(&self) -> EvalStrategy;
@@ -90,6 +92,10 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
 
     fn as_any(&self) -> &dyn Any {
         self as &dyn Any
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self as &mut dyn Any
     }
 
     fn eval_strategy(&self) -> EvalStrategy {

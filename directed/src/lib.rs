@@ -4,6 +4,7 @@ mod node;
 mod registry;
 mod stage;
 mod types;
+mod error;
 
 // TODO: Make a cool visual "rust playgraph" based on this crate
 //    - Ability to create stages, and compile
@@ -412,7 +413,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Test complex graph with diamond pattern
+    // Test graph with diamond pattern
     #[test]
     fn diamond_graph_test() {
         #[stage]

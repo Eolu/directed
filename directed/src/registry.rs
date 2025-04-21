@@ -17,6 +17,30 @@ impl Registry {
         Self(Slab::new())
     }
 
+    /// Get a reference to the state of a specific node.
+    pub fn state<S: Stage + 'static>(&self, id: usize) -> anyhow::Result<&S::State> {
+        self.validate_node_type::<S>(id)?;
+        match self.0.get(id) {
+            Some(any_node) => match any_node.as_any().downcast_ref::<Node<S>>() {
+                Some(node) => Ok(&node.state),
+                None => unreachable!(),
+            },
+            None => Err(anyhow!("Node id {id} does not exist")),
+        }
+    }
+
+    /// Get a mutable reference to the state of a specific node.
+    pub fn state_mut<S: Stage + 'static>(&mut self, id: usize) -> anyhow::Result<&mut S::State> {
+        self.validate_node_type::<S>(id)?;
+        match self.0.get_mut(id) {
+            Some(any_node) => match any_node.as_any_mut().downcast_mut::<Node<S>>() {
+                Some(node) => Ok(&mut node.state),
+                None => unreachable!(),
+            },
+            None => Err(anyhow!("Node id {id} does not exist")),
+        }
+    }
+
     /// Add a node to the registry. This returns a unique identifier for that
     /// node, which can be used to add it to a [crate::Graph]. This uses default
     /// state
@@ -92,6 +116,8 @@ impl Registry {
     ///
     /// This is an important internal detail: a parent a child node often need
     /// to be modified together.
+    /// 
+    /// This function will panic if id0 and id1 are the same.
     pub fn get2_mut(
         &mut self,
         id0: usize,
