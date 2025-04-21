@@ -18,7 +18,6 @@ pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, NodeOutput};
 
 // TODO: Add a traceable error system, right now it's ignored with anyhow
-// TODO: Add the ability to take inputs by reference in transparent stage (should be the correct, default behavior)
 // TODO: Graph + Registry could be combined to create a Node (with a baked stage)
 // TODO: An attribute that makes it serialize the cache and store between runs!
 // TODO: Accept inputs for top-level nodes, return outputs from leaf nodes
@@ -31,12 +30,6 @@ pub use types::{DataLabel, NodeOutput};
 //       based on that combination, it would avoid the possibility of combining a registry with an
 //       invalid graph entirely. DO THIS!
 // TODO: Opaque outputs can have multiple children but must be eval'd for each one
-
-// t_out -> o_in (ref)     = just pass ref in wrapper
-// o_out -> o_in (ref)     = pass in then drop after
-// any -> t_in (ref)       = ERROR
-// DONE: o_out -> o/t_in (owned) = move
-// DONE: t_out -> o/t_in (owned) = clone in wrapper then move clone in
 
 #[cfg(test)]
 mod tests {
