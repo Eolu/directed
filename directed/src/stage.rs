@@ -30,7 +30,7 @@ pub trait Stage: Clone {
     /// Evaluate the stage with the given input and state
     fn evaluate(
         &self,
-        state: &mut Option<Self::State>,
+        state: &mut Self::State,
         inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
     ) -> anyhow::Result<NodeOutput>;
 

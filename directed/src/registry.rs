@@ -18,9 +18,17 @@ impl Registry {
     }
 
     /// Add a node to the registry. This returns a unique identifier for that
+    /// node, which can be used to add it to a [crate::Graph]. This uses default
+    /// state
+    pub fn register<S: Stage + 'static>(&mut self, stage: S) -> usize
+    where S::State: Default {
+        self.0.insert(Box::new(Node::new(stage, S::State::default())))
+    }
+
+    /// Add a node to the registry. This returns a unique identifier for that
     /// node, which can be used to add it to a [crate::Graph]
-    pub fn register<S: Stage + 'static>(&mut self, stage: S) -> usize {
-        self.0.insert(Box::new(Node::new(stage, None)))
+    pub fn register_with_state<S: Stage + 'static>(&mut self, stage: S, state: S::State) -> usize {
+        self.0.insert(Box::new(Node::new(stage, state)))
     }
 
     /// Returns an error if the registry doesn't contain a node with a stage

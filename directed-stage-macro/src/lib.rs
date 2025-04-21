@@ -8,8 +8,6 @@ use syn::{
     punctuated::Punctuated,
 };
 
-// TODO: Accept a single "out" attribute with a list of returns, rather than 1 per return.
-
 /// A macro that wraps a function with the standardized interface:
 /// fn fn_name(&mut DataMap, &DataMap) -> anyhow::Result<DataMap>
 ///
@@ -23,7 +21,7 @@ use syn::{
 /// ```
 ///
 /// Multiple outputs are also supported with this syntax:
-/// #[stage(out(arg1_name: String), out(arg2_name: Vec<u8>))]
+/// #[stage(out(arg1_name: String, arg2_name: Vec<u8>))]
 /// fn output_things() -> directed::NodeOutput {
 ///    let some_string = String::from("Hello Graph!");
 ///    let some_vec = vec![1, 2, 3, 4, 5];
@@ -50,6 +48,7 @@ struct StageConfig {
     cache_strategy: CacheStrategy,
     outputs: Vec<(String, Type)>,
     inputs: Vec<InputParam>,
+    state_type: proc_macro2::TokenStream
 }
 
 enum RefType {
@@ -104,6 +103,7 @@ impl Parse for Output {
 enum StageArg {
     Flag(syn::Ident),
     Output(Outputs),
+    State(syn::Type)
 }
 
 impl Parse for StageArg {
@@ -117,6 +117,10 @@ impl Parse for StageArg {
                 let content;
                 let _paren_token = syn::parenthesized!(content in input);
                 return Ok(StageArg::Output(content.parse()?));
+            } else if ident == "state" {
+                let content;
+                let _paren_token = syn::parenthesized!(content in input);
+                return Ok(StageArg::State(content.parse()?));
             } else {
                 return Ok(StageArg::Flag(ident));
             }
@@ -152,6 +156,7 @@ impl StageConfig {
         let mut is_lazy = false;
         let mut cache_strategy = CacheStrategy::None;
         let mut outputs = Vec::new();
+        let mut state_type = quote!(());
 
         // Process stage attribute arguments
         for arg in meta_args.args.iter() {
@@ -171,6 +176,9 @@ impl StageConfig {
                     for output in &output_defs.0 {
                         outputs.push((output.name.to_string(), output.ty.clone()));
                     }
+                },
+                StageArg::State(ty) => {
+                    state_type = quote!(#ty);
                 }
             }
         }
@@ -190,6 +198,7 @@ impl StageConfig {
             cache_strategy,
             outputs,
             inputs,
+            state_type
         })
     }
 
@@ -242,7 +251,7 @@ impl StageConfig {
                 // Check if the return type is NodeOutput
                 if let Type::Path(type_path) = &**ty {
                     if let Some(segment) = type_path.path.segments.last() {
-                        // TODO: This is a hack, just properly check if any our args exist
+                        // TODO: This is a hack, just properly check if any out attributes exist
                         if segment.ident == "NodeOutput" {
                             // NodeOutput will be handled elsewhere
                             return Ok(Vec::new());
@@ -491,11 +500,11 @@ fn generate_output_handling(config: &StageConfig) -> proc_macro2::TokenStream {
     let arg_names = config.inputs.iter().map(|input| &input.name);
     if config.is_multi_output() {
         quote! {
-            Ok(Self::get_fn()(#(#arg_names),*))
+            Ok(Self::get_fn()(state, #(#arg_names),*))
         }
     } else {
         quote! {
-            Ok(directed::NodeOutput::new_simple(Self::get_fn()(#(#arg_names),*)))
+            Ok(directed::NodeOutput::new_simple(Self::get_fn()(state, #(#arg_names),*)))
         }
     }
 }
@@ -543,6 +552,7 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
 fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     let original_fn = &config.original_fn;
     let stage_name = &config.stage_name;
+    let state_type = &config.state_type;
     let fn_attrs = &original_fn.attrs;
     let fn_vis = &original_fn.vis;
     let original_args = &original_fn.sig.inputs;
@@ -552,7 +562,6 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     // Generate code sections
     let input_registrations = generate_input_registrations(&config.inputs);
     let output_registrations = generate_output_registrations(&config.outputs);
-    // TODO: This is wonked up!
     let extraction_code = match config.cache_strategy {
         CacheStrategy::None => generate_extraction_code_move(&config.inputs),
         CacheStrategy::Last => generate_extraction_code_cache_last(&config.inputs),
@@ -599,9 +608,8 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         }
 
         impl directed::Stage for #stage_name {
-            // TODO: Actually implement state
-            type State = ();
-            type BaseFn = fn(#original_args) #fn_return_type;
+            type State = #state_type;
+            type BaseFn = fn(state: &mut #state_type, #original_args) #fn_return_type;
 
             fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
                 &self.inputs
@@ -611,7 +619,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 &self.outputs
             }
 
-            fn evaluate(&self, _: &mut Option<Self::State>, inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>) -> anyhow::Result<directed::NodeOutput> {
+            fn evaluate(&self, state: &mut Self::State, inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>) -> anyhow::Result<directed::NodeOutput> {
                 #(#extraction_code)*
                 #(#prepare_input_types_code)*
                 #output_handling
@@ -625,7 +633,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 #reevaluation_rule
             }
 
-            // TODO: This got unruly and can be simplified
+            // TODO: This can be simplified to be a bit less unruly
             fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
                 fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
                     match input.inner() {
@@ -643,7 +651,6 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                     }
                 }
 
-                // TODO: Handle opaque ref in, need a way to check ref
                 if parent.reeval_rule() == directed::ReevaluationRule::Move {
                     if node.reeval_rule() == directed::ReevaluationRule::Move && node.input_reftype(&input) != Some(directed::RefType::Owned) {
                         inject_transparent_out_to_opaque_ref_in(node, parent, output, input)
@@ -657,7 +664,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
 
             fn get_fn() -> Self::BaseFn {
                 #(#fn_attrs)*
-                fn original_fn(#original_args) #fn_return_type #original_body
+                fn original_fn(state: &mut #state_type, #original_args) #fn_return_type #original_body
                 return original_fn;
             }
         }

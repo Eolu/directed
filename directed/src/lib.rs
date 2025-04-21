@@ -5,7 +5,7 @@ mod registry;
 mod stage;
 mod types;
 
-// TODO: Make a cool visual "rust playground" based on this crate
+// TODO: Make a cool visual "rust playgraph" based on this crate
 //    - Ability to create stages, and compile
 //    - Ability to create nodes from stages, and attach them and execute (without recompiling!)
 
@@ -29,7 +29,7 @@ pub use types::{DataLabel, NodeOutput};
 //       If we could istead combine STAGES with graphs, then output a valid registry full of nodes
 //       based on that combination, it would avoid the possibility of combining a registry with an
 //       invalid graph entirely. DO THIS!
-// TODO: Opaque outputs can have multiple children but must be eval'd for each one
+// TODO: async support
 
 #[cfg(test)]
 mod tests {
@@ -38,7 +38,7 @@ mod tests {
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // Basic test already included in the original code
+    // A simple sanity-check test that doesn't try anything interesting
     #[test]
     fn basic_macro_test() {
         #[stage(lazy, cache_last)]
@@ -491,18 +491,40 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // TODO: Test node evaluation with state
-    // #[test]
-    // fn node_with_state_test() {
-    //     todo!()
-    // }
+    /// Test nodes with internal state
+    #[test]
+    fn node_with_state_test() {
+        #[stage(state((u8, u8)))]
+        fn StateStage() {
+            assert_eq!(state.1, state.0 * 5);
+            state.0 += 1;
+            state.1 += 5;
+            println!("State is {}", state.1);
+        }
+
+        let mut registry = Registry::new();
+        // Note: If the state has an implementation of "default", the simple
+        // register can still be called instead
+        let node = registry.register_with_state(StateStage::new(), (1, 5));
+        let graph = graph! {
+            nodes: &[node],
+            connections: {}
+        }
+        .unwrap();
+
+        // TODO: Actually return results so this test can be real (right now it would pass if state never updated)
+        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry).unwrap();
+    }
 
     // Test the output! macro
     #[test]
     fn output_macro_test() {
-        // TODO: This should also pass without cache_last
-        #[stage(cache_last, out(number: i32, text: String, vector: Vec<i32>))]
+        #[stage(out(number: i32, text: String, vector: Vec<i32>))]
         fn ProduceOutput1() -> NodeOutput {
+            println!("Running ProduceOutput1");
             let number = 42;
             let text = "hello".to_string();
             let vector = vec![1, 2, 3];

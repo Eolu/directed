@@ -23,6 +23,7 @@ macro_rules! graph {
     // Handle explicitly named inputs and outputs
     (nodes: $nodes:expr, connections: { $($left_node:expr => $output:expr => $input:expr => $right_node:expr,)* }) => {
         {
+            #[allow(unused_mut)]
             let mut graph = directed::Graph::from_node_indices($nodes);
             loop {
                 $(
@@ -31,7 +32,7 @@ macro_rules! graph {
                         break Err(e);
                     }
                 )*
-                break Ok(graph);
+                break Ok(graph) as anyhow::Result<directed::graphs::Graph>;
             }
         }
     }

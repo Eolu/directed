@@ -24,14 +24,14 @@ pub struct Node<S: Stage> {
     pub(super) stage: S,
     // Arbitrary state, by default will be (). Can be used to make nodes even
     // MORE stateful.
-    pub(super) state: Option<S::State>,
+    pub(super) state: S::State,
     pub(super) inputs: HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
     pub(super) outputs: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
     pub(super) input_changed: bool,
 }
 
 impl<S: Stage> Node<S> {
-    pub fn new(stage: S, initial_state: Option<S::State>) -> Self {
+    pub fn new(stage: S, initial_state: S::State) -> Self {
         Self {
             stage,
             state: initial_state,
