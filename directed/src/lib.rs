@@ -14,7 +14,7 @@ pub use directed_stage_macro::stage;
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Node};
 pub use registry::Registry;
-pub use stage::{EvalStrategy, ReevaluationRule, Stage, RefType};
+pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, NodeOutput};
 
 // TODO: Add a traceable error system, right now it's ignored with anyhow
@@ -28,7 +28,7 @@ pub use types::{DataLabel, NodeOutput};
 // TODO: A canon way to create a stage out of an entire graph
 //       Right now we combine nodes with stages to make the registry, and registries with graphs.
 //       If we could istead combine STAGES with graphs, then output a valid registry full of nodes
-//       based on that combination, it would avoid the possibility of combining a registry with an 
+//       based on that combination, it would avoid the possibility of combining a registry with an
 //       invalid graph entirely. DO THIS!
 // TODO: Opaque outputs can have multiple children but must be eval'd for each one
 
@@ -41,9 +41,9 @@ pub use types::{DataLabel, NodeOutput};
 #[cfg(test)]
 mod tests {
     extern crate self as directed;
+    use super::*;
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use super::*;
 
     // Basic test already included in the original code
     #[test]
@@ -110,7 +110,7 @@ mod tests {
         let producer = registry.register(MultiOutputStage::new());
         let consumer1 = registry.register(ConsumerStage1::new());
         let consumer2 = registry.register(ConsumerStage2::new());
-        
+
         let graph = graph! {
             nodes: &[producer, consumer1, consumer2],
             connections: {
@@ -143,7 +143,7 @@ mod tests {
         let mut registry = Registry::new();
         let lazy_node = registry.register(LazyStage::new());
         let urgent_node = registry.register(UrgentStage::new());
-        
+
         let graph = graph! {
             nodes: &[lazy_node, urgent_node],
             connections: {
@@ -154,7 +154,7 @@ mod tests {
 
         // Reset counter
         COUNTER.store(0, Ordering::SeqCst);
-        
+
         // Execute should evaluate LazyStage because UrgentStage depends on it
         graph.execute(&mut registry).unwrap();
     }
@@ -197,7 +197,7 @@ mod tests {
         let transparent = registry.register(TransparentStage::new());
         let opaque = registry.register(OpaqueStage::new());
         let sink = registry.register(SinkStage::new());
-        
+
         let graph = graph! {
             nodes: &[source, transparent, opaque, sink],
             connections: {
@@ -212,12 +212,12 @@ mod tests {
         // Reset counters
         TRANSPARENT_COUNTER.store(0, Ordering::SeqCst);
         OPAQUE_COUNTER.store(0, Ordering::SeqCst);
-        
+
         // First execution
         graph.execute(&mut registry).unwrap();
         assert_eq!(TRANSPARENT_COUNTER.load(Ordering::SeqCst), 1);
         assert_eq!(OPAQUE_COUNTER.load(Ordering::SeqCst), 1);
-        
+
         // Second execution - transparent stage shouldn't execute again since inputs haven't changed
         graph.execute(&mut registry).unwrap();
         assert_eq!(TRANSPARENT_COUNTER.load(Ordering::SeqCst), 1); // Still 1
@@ -240,7 +240,7 @@ mod tests {
         let mut registry = Registry::new();
         let node_a = registry.register(StageA::new());
         let node_b = registry.register(StageB::new());
-        
+
         // Attempt to create a cyclic graph
         let result = graph! {
             nodes: &[node_a, node_b],
@@ -249,7 +249,7 @@ mod tests {
                 node_b => "_" => "input" => node_a,
             }
         };
-        
+
         // The graph creation should fail due to cycle detection
         assert!(result.is_err());
     }
@@ -263,30 +263,33 @@ mod tests {
         }
 
         let mut registry = Registry::new();
-        
+
         // Register a node
         let node_id = registry.register(SimpleStage::new());
-        
+
         // Validate node type
         registry.validate_node_type::<SimpleStage>(node_id).unwrap();
-        
+
         // Validate incorrect type
         #[stage]
         fn OtherStage() -> String {
             "hello".to_string()
         }
         assert!(registry.validate_node_type::<OtherStage>(node_id).is_err());
-        
+
         // Get node
         assert!(registry.get(node_id).is_ok());
-        
+
         // Get mutable node
         assert!(registry.get_mut(node_id).is_ok());
-        
+
         // Unregister
-        let node = registry.unregister::<SimpleStage>(node_id).unwrap().unwrap();
+        let node = registry
+            .unregister::<SimpleStage>(node_id)
+            .unwrap()
+            .unwrap();
         assert!(node.stage.eval_strategy() == EvalStrategy::Urgent);
-        
+
         // Node no longer exists
         assert!(registry.get(node_id).is_err());
     }
@@ -295,10 +298,10 @@ mod tests {
     #[test]
     fn nonexistent_node_test() {
         let mut registry = Registry::new();
-        
+
         // Node ID that doesn't exist
         let invalid_id = 9999;
-        
+
         // Various operations should fail
         assert!(registry.get(invalid_id).is_err());
         assert!(registry.get_mut(invalid_id).is_err());
@@ -322,7 +325,7 @@ mod tests {
         let mut registry = Registry::new();
         let producer = registry.register(StringStage::new());
         let consumer = registry.register(IntegerConsumer::new());
-        
+
         // Create graph with type-incompatible connection
         let graph = graph! {
             nodes: &[producer, consumer],
@@ -354,7 +357,7 @@ mod tests {
         let mut registry = Registry::new();
         let producer = registry.register(ProducerStage::new());
         let consumer = registry.register(ConsumerStage::new());
-        
+
         // Only connect one of the required inputs
         let graph = graph! {
             nodes: &[producer, consumer],
@@ -375,13 +378,13 @@ mod tests {
         let label1 = DataLabel::new("test");
         let label2 = DataLabel::new("test");
         let label3 = DataLabel::new("different");
-        
+
         assert_eq!(label1, label2);
         assert_ne!(label1, label3);
-        
+
         let const_label = DataLabel::new_const("const");
         assert_eq!(const_label.inner(), "const");
-        
+
         let from_str: DataLabel = "string".into();
         assert_eq!(from_str.inner(), "string");
     }
@@ -402,7 +405,7 @@ mod tests {
         let mut registry = Registry::new();
         let node1 = registry.register(LazyStage1::new());
         let node2 = registry.register(LazyStage2::new());
-        
+
         let graph = graph! {
             nodes: &[node1, node2],
             connections: {
@@ -445,7 +448,7 @@ mod tests {
         let path_a = registry.register(PathA::new());
         let path_b = registry.register(PathB::new());
         let sink = registry.register(Sink::new());
-        
+
         let graph = graph! {
             nodes: &[source, path_a, path_b, sink],
             connections: {
@@ -480,7 +483,7 @@ mod tests {
         let mut registry = Registry::new();
         let producer = registry.register(MultiOutputStage::new());
         let consumer = registry.register(ConsumerStage::new());
-        
+
         // Connect with non-existent output name
         let graph = graph! {
             nodes: &[producer, consumer],
@@ -510,25 +513,25 @@ mod tests {
             let number = 42;
             let text = "hello".to_string();
             let vector = vec![1, 2, 3];
-            
+
             output! {
                 number,
                 text,
                 vector
             }
         }
-        
+
         #[stage]
         fn ConsumeOutputs(num: i32, txt: String, vec: Vec<i32>) {
             assert_eq!(num, 42);
             assert_eq!(txt, "hello");
             assert_eq!(vec, vec![1, 2, 3]);
         }
-        
+
         let mut registry = Registry::new();
         let producer = registry.register(ProduceOutput1::new());
         let consumer = registry.register(ConsumeOutputs::new());
-        
+
         let graph = graph! {
             nodes: &[producer, consumer],
             connections: {
@@ -538,7 +541,7 @@ mod tests {
             }
         }
         .unwrap();
-        
+
         graph.execute(&mut registry).unwrap();
     }
 
@@ -546,23 +549,27 @@ mod tests {
     #[test]
     fn registry_type_validation_test() {
         #[stage]
-        fn StageA() -> i32 { 42 }
+        fn StageA() -> i32 {
+            42
+        }
 
         #[stage]
-        fn StageB() -> String { "hello".to_string() }
+        fn StageB() -> String {
+            "hello".to_string()
+        }
 
         let mut registry = Registry::new();
         let node_a = registry.register(StageA::new());
-        
+
         // Correct type validation should succeed
         assert!(registry.validate_node_type::<StageA>(node_a).is_ok());
-        
+
         // Incorrect type validation should fail
         assert!(registry.validate_node_type::<StageB>(node_a).is_err());
-        
+
         // Unregistering with incorrect type should fail
         assert!(registry.unregister::<StageB>(node_a).is_err());
-        
+
         // Unregistering with correct type should succeed
         assert!(registry.unregister::<StageA>(node_a).is_ok());
     }

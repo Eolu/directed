@@ -37,7 +37,7 @@ impl NodeOutput {
     /// represent a single output.
     pub fn add<T: Send + Sync + 'static>(mut self, name: &str, value: T) -> Self {
         match &mut self {
-            // This panic is the primary reason direct interaction with this 
+            // This panic is the primary reason direct interaction with this
             // type is not recommended
             NodeOutput::Standard(_) => panic!("Attempted to add '{name}' to a simple output"),
             NodeOutput::Named(hash_map) => {
@@ -51,15 +51,19 @@ impl NodeOutput {
 /// Associates a name with a type, internal detail
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DataLabel {
-    name: std::borrow::Cow<'static, str>
+    name: std::borrow::Cow<'static, str>,
 }
 impl DataLabel {
     pub fn new(name: impl Into<String>) -> Self {
-        Self{name: std::borrow::Cow::from(name.into())}
+        Self {
+            name: std::borrow::Cow::from(name.into()),
+        }
     }
 
     pub const fn new_const(name: &'static str) -> Self {
-        Self{name: std::borrow::Cow::Borrowed(name)}
+        Self {
+            name: std::borrow::Cow::Borrowed(name),
+        }
     }
 
     pub fn inner(&self) -> &str {

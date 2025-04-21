@@ -1,4 +1,8 @@
-use std::{any::{Any, TypeId}, collections::HashMap, sync::Arc};
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+    sync::Arc,
+};
 
 use crate::{
     node::{AnyNode, Node},
@@ -9,7 +13,7 @@ use crate::{
 pub enum RefType {
     Owned,
     Borrowed,
-    BorrowedMut
+    BorrowedMut,
 }
 
 /// Defines all the information about how a stage is handled.
@@ -70,7 +74,7 @@ pub enum ReevaluationRule {
     /// If all inputs are previous inputs, don't evaluate and just return a
     /// clone of the cached output.
     CacheLast,
-    /// If all inputs are equal to ANY previous input combination, don't 
+    /// If all inputs are equal to ANY previous input combination, don't
     /// evaluate and just return a clone of the cached output associated with
     /// that exact set of inputs.
     CacheAll,

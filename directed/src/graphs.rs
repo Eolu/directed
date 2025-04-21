@@ -1,9 +1,9 @@
 //! Defines the graph structure that controls execution flow. The graph built
 //! will be based on the nodes within a [`Registry`]. Multiple graphs can be
-//! built from a single registry. 
-//! 
-//! It is technically possible to use multiple registries with a single graph, 
-//! but this would require that the registries have identical node Ids with 
+//! built from a single registry.
+//!
+//! It is technically possible to use multiple registries with a single graph,
+//! but this would require that the registries have identical node Ids with
 //! identical input/output types.
 // TODO: The above could be made safe and easy to do, and likely is worth it
 use daggy::{Dag, NodeIndex, Walker};
@@ -39,7 +39,7 @@ macro_rules! graph {
 
 /// Directed Acryllic Graph representing the flow of execution in that pipeline.
 /// Only operates on index and edge information - doesn't store actual state.
-/// 
+///
 /// See [`Registry`] for where state comes in.
 #[derive(Debug, Clone)]
 pub struct Graph {

@@ -1,4 +1,4 @@
-//! The registry is the "global" store of logic and state. 
+//! The registry is the "global" store of logic and state.
 use anyhow::anyhow;
 use slab::Slab;
 use std::any::TypeId;
@@ -8,7 +8,7 @@ use crate::{
     stage::Stage,
 };
 
-/// A [Registry] stores each node, its state, and the logical [Stage] 
+/// A [Registry] stores each node, its state, and the logical [Stage]
 /// associated with it.
 pub struct Registry(pub(super) Slab<Box<dyn AnyNode>>);
 
@@ -23,21 +23,18 @@ impl Registry {
         self.0.insert(Box::new(Node::new(stage, None)))
     }
 
-    /// Returns an error if the registry doesn't contain a node with a stage 
+    /// Returns an error if the registry doesn't contain a node with a stage
     /// of the specified type with the given id.
     pub fn validate_node_type<S: Stage + 'static>(&self, id: usize) -> anyhow::Result<()> {
         match self.0.get(id) {
-            Some(node) => {
-                match node.as_any().downcast_ref::<Node<S>>()
-                {
-                    Some(_) => Ok(()),
-                    None => Err(anyhow!(
-                        "Invalid node type: (id:{:?}). Expected: (id:{:?})",
-                        TypeId::of::<Node<S>>(),
-                        node.as_any().type_id()
-                    )),
-                }
-            }
+            Some(node) => match node.as_any().downcast_ref::<Node<S>>() {
+                Some(_) => Ok(()),
+                None => Err(anyhow!(
+                    "Invalid node type: (id:{:?}). Expected: (id:{:?})",
+                    TypeId::of::<Node<S>>(),
+                    node.as_any().type_id()
+                )),
+            },
             None => Err(anyhow!("Node id {id} does not exist")),
         }
     }
@@ -84,7 +81,7 @@ impl Registry {
     }
 
     /// Get 2 mutable type-erased nodes
-    /// 
+    ///
     /// This is an important internal detail: a parent a child node often need
     /// to be modified together.
     pub fn get2_mut(

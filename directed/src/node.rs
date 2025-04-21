@@ -3,12 +3,13 @@ use anyhow::anyhow;
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    sync::Arc
+    sync::Arc,
 };
 
 use crate::{
+    RefType,
     stage::{EvalStrategy, ReevaluationRule, Stage},
-    types::{DataLabel, NodeOutput}, RefType,
+    types::{DataLabel, NodeOutput},
 };
 
 /// Used for single-output functions
@@ -16,12 +17,12 @@ pub(crate) const UNNAMED_OUTPUT_NAME: DataLabel = DataLabel::new_const("_");
 
 /// Every node wraps a Stage, which is a decorated function that has some
 /// number of inputs and some number of outputs.
-/// 
+///
 /// TODO: Explain the caching functionality in detail
 #[derive(Debug)]
 pub struct Node<S: Stage> {
     pub(super) stage: S,
-    // Arbitrary state, by default will be (). Can be used to make nodes even 
+    // Arbitrary state, by default will be (). Can be used to make nodes even
     // MORE stateful.
     pub(super) state: Option<S::State>,
     pub(super) inputs: HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
@@ -42,7 +43,7 @@ impl<S: Stage> Node<S> {
 }
 
 /// This is used to type-erase a node. It's public because the macro needs to
-/// use this, but there should be no reason anyone should manually implement 
+/// use this, but there should be no reason anyone should manually implement
 /// this.
 pub trait AnyNode: Any {
     /// Upcast to `dyn Any` to get its more-specific downcast capabilities
@@ -69,7 +70,9 @@ pub trait AnyNode: Any {
         input: DataLabel,
     ) -> Result<(), anyhow::Error>;
     /// Used to support `[Self::flow_data]`
-    fn inputs_mut(&mut self) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>;
+    fn inputs_mut(
+        &mut self,
+    ) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>;
     /// Used to support `[Self::flow_data]`
     fn outputs_mut(&mut self) -> &mut HashMap<DataLabel, Arc<dyn Any + Send + Sync>>;
     /// Look of the reftype of a particular input
@@ -154,7 +157,9 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
         stage_clone.inject_input(self, parent, output, input)
     }
 
-    fn inputs_mut(&mut self) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)> {
+    fn inputs_mut(
+        &mut self,
+    ) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)> {
         &mut self.inputs
     }
 
@@ -169,7 +174,7 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
     fn input_changed(&self) -> bool {
         self.input_changed
     }
-    
+
     fn input_reftype(&self, name: &DataLabel) -> Option<RefType> {
         self.stage.inputs().get(name).map(|input| input.1)
     }
