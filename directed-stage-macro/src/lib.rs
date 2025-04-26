@@ -9,7 +9,7 @@ use syn::{
 };
 
 /// A macro that wraps a function with the standardized interface:
-/// fn fn_name(&mut DataMap, &DataMap) -> anyhow::Result<DataMap>
+/// fn fn_name(&mut DataMap, &DataMap) -> Result<DataMap>
 ///
 /// Example usage:
 ///
@@ -295,7 +295,7 @@ fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::Token
         let ref_type = input.ref_type.quoted();
         
         quote! {
-            inputs.insert(directed::DataLabel::new(#arg_name), (std::any::TypeId::of::<#arg_type>(), #ref_type));
+            inputs.insert(directed::DataLabel::new_with_type_name(#arg_name, stringify!(#arg_type)), (std::any::TypeId::of::<#arg_type>(), #ref_type));
         }
     }).collect()
 }
@@ -311,7 +311,7 @@ fn generate_output_registrations(outputs: &[(String, Type)]) -> Vec<proc_macro2:
         .iter()
         .map(|(name, ty)| {
             quote! {
-                outputs.insert(directed::DataLabel::new(#name), std::any::TypeId::of::<#ty>());
+                outputs.insert(directed::DataLabel::new_with_type_name(#name, stringify!(#ty)), std::any::TypeId::of::<#ty>());
             }
         })
         .collect()
@@ -342,11 +342,10 @@ fn generate_extraction_code_move(inputs: &[InputParam]) -> Vec<proc_macro2::Toke
                 let dc = std::sync::Arc::downcast::<#arg_type>(input);
                 match dc {
                     Ok(val) => (val, reeval_rule),
-                    Err(e) => return Err(anyhow::anyhow!("Type mismatch for input [{}: {:?}], expected: [{}: {:?}] (move). ", 
-                                                         #clean_arg_name, e.type_id(), stringify!(#arg_type), std::any::TypeId::of::<#arg_type>()))
+                    Err(e) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
                 }
             } else {
-                return Err(anyhow::anyhow!("Missing required input: {}", #clean_arg_name));
+                return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
             };
         }
     }).collect()
@@ -363,11 +362,10 @@ fn generate_extraction_code_cache_last(inputs: &[InputParam]) -> Vec<proc_macro2
             let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
                 match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
                     Ok(val) => (val, *reeval_rule),
-                    Err(_) => return Err(anyhow::anyhow!("Type mismatch for input {}, expected: {} (cache_last)", 
-                                                       #clean_arg_name, stringify!(#arg_type)))
+                    Err(_) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
                 }
             } else {
-                return Err(anyhow::anyhow!("Missing required input: {}", #clean_arg_name));
+                return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
             };
         }
     }).collect()
@@ -385,9 +383,9 @@ fn inject_opaque_out(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
                 let input_changed = node.input_changed();
                 let output_val = parent.outputs_mut()
                     .remove(&output)
-                    .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?;
+                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
                 let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
-                    .map_err(|_| anyhow::anyhow!("Type mismatch for output (inject_opaque_out)"))?;
+                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
                 node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::Move));
                 Ok(())
             }
@@ -396,7 +394,7 @@ fn inject_opaque_out(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
 
     // Add the default case
     code.push(quote! {
-        name => Err(anyhow::anyhow!("Unexpected node name: {}", name))
+        name => Err(directed::InjectionError::InputNotFound(name.into()))
     });
 
     code
@@ -415,16 +413,16 @@ fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2:
                 let input_changed = node.input_changed();
                 let output_val = parent.outputs_mut()
                     .get(&output)
-                    .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?
+                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?
                     .clone(); // Clone the Arc
                 let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
-                    .map_err(|_| anyhow::anyhow!("Type mismatch for output (inject_transparent_out_to_owned_in)"))?;
+                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
                 
                 match node.inputs_mut().get(&input) {
                     Some((input_val, _)) => {
                         let input_val = input_val
                             .downcast_ref::<#arg_type>()
-                            .ok_or_else(|| anyhow::anyhow!("Type mismatch for input"))?;
+                            .ok_or_else(|| directed::InjectionError::InputTypeMismatch(input.clone()))?;
                         if !input_changed && output_val.as_ref() != input_val {
                             node.set_input_changed(true);
                         }
@@ -442,7 +440,7 @@ fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2:
 
     // Add the default case
     code.push(quote! {
-        name => Err(anyhow::anyhow!("Unexpected node name: {}", name))
+        name => Err(directed::InjectionError::InputNotFound(name.into()))
     });
 
     code
@@ -458,15 +456,15 @@ fn inject_transparent_out_to_opaque_ref_in(inputs: &[InputParam]) -> Vec<proc_ma
                 let input_changed = node.input_changed();
                 let output_val_arc = parent.outputs_mut()
                     .get(&output)
-                    .ok_or_else(|| anyhow::anyhow!("Output '{output:?}' not found"))?;
+                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
                 let output_val_ref = std::sync::Arc::downcast::<#arg_type>(output_val_arc.clone())
-                    .map_err(|_| anyhow::anyhow!("Type mismatch for output (inject_transparent_out_to_opaque_ref_in)"))?;
+                    .map_err(|_| directed::InjectionError::InputTypeMismatch(input.clone()))?;
                 
                 match node.inputs_mut().get(&input) {
                     Some((input_val, _)) => {
                         let input_val = input_val
                             .downcast_ref::<#arg_type>()
-                            .ok_or_else(|| anyhow::anyhow!("Type mismatch for input"))?;
+                            .ok_or_else(|| directed::InjectionError::InputTypeMismatch(input.clone()))?;
                         if !input_changed && input_val != &*output_val_ref {
                             node.set_input_changed(true);
                         }
@@ -484,7 +482,7 @@ fn inject_transparent_out_to_opaque_ref_in(inputs: &[InputParam]) -> Vec<proc_ma
 
     // Add the default case
     code.push(quote! {
-        name => Err(anyhow::anyhow!("Unexpected node name: {}", name))
+        name => Err(directed::InjectionError::InputNotFound(name.into()))
     });
 
     code
@@ -522,7 +520,7 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
                             // Parent is opaque, use Arc::into_inner
                             match std::sync::Arc::into_inner(#arg_name) {
                                 Some(arg) => arg,
-                                None => {return Err(anyhow::anyhow!("Unexpected references alive for: {}", stringify!(#arg_name)))}
+                                None => {return Err(directed::InjectionError::TooManyReferences(stringify!(#arg_name)))}
                             }
                         },
                         directed::ReevaluationRule::CacheLast => {
@@ -616,7 +614,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 &self.outputs
             }
 
-            fn evaluate(&self, state: &mut Self::State, inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>) -> anyhow::Result<directed::NodeOutput> {
+            fn evaluate(&self, state: &mut Self::State, inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>) -> Result<directed::NodeOutput, directed::InjectionError> {
                 #(#extraction_code)*
                 #(#prepare_input_types_code)*
                 #output_handling
@@ -631,18 +629,18 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
             }
 
             // TODO: This can be simplified to be a bit less unruly
-            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
-                fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
+                fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
                     match input.inner() {
                         #(#inject_opaque_out_code)*
                     }
                 }
-                fn inject_transparent_out_to_owned_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                fn inject_transparent_out_to_owned_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
                     match input.inner() {
                         #(#inject_transparent_out_to_owned_in_code)*
                     }
                 }
-                fn inject_transparent_out_to_opaque_ref_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> anyhow::Result<()> {
+                fn inject_transparent_out_to_opaque_ref_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
                     match input.inner() {
                         #(#inject_transparent_out_to_opaque_ref_in_code)*
                     }
@@ -657,6 +655,10 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 } else {
                     inject_transparent_out_to_owned_in(node, parent, output, input)
                 }
+            }
+
+            fn name(&self) -> &str {
+                stringify!(#stage_name)
             }
 
             fn get_fn() -> Self::BaseFn {

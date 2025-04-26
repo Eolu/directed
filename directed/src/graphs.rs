@@ -10,10 +10,7 @@ use daggy::{Dag, NodeIndex, Walker};
 use std::collections::HashMap;
 
 use crate::{
-    NodeOutput,
-    registry::Registry,
-    stage::{EvalStrategy, ReevaluationRule},
-    types::DataLabel,
+    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, Error, NodeExecutionError, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError
 };
 
 // TODO: Still not perfect, need a nice way to make nodes connections even if they don't have any particular i/o relationship
@@ -24,7 +21,7 @@ macro_rules! graph {
     (nodes: $nodes:expr, connections: { $($left_node:ident: $output:expr => $right_node:ident: $input:expr,)* }) => {
         {
             #[allow(unused_mut)]
-            let mut graph = directed::Graph::from_node_indices($nodes);
+            let mut graph = directed::Graph::from_node_indices($nodes.as_ref());
             loop {
                 $(
                     if let Err(e) = graph.connect($left_node, $right_node, directed::DataLabel::new_const(stringify!($output)), directed::DataLabel::new_const(stringify!($input)))
@@ -32,7 +29,7 @@ macro_rules! graph {
                         break Err(e);
                     }
                 )*
-                break Ok(graph) as anyhow::Result<directed::graphs::Graph>;
+                break Ok(graph) as Result<directed::graphs::Graph, directed::EdgeCreationError>;
             }
         }
     }
@@ -76,6 +73,7 @@ impl Graph {
 
     /// Adds a new node to the graph, by its [`Registry`] index.
     pub fn add_node(&mut self, id: usize) -> NodeIndex {
+        // TODO: Use node weights in a better way
         let idx = self.dag.add_node(id);
         self.node_indices.insert(id, idx);
         idx
@@ -89,15 +87,15 @@ impl Graph {
         to_id: usize,
         source_output: DataLabel,
         target_input: DataLabel,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), EdgeCreationError> {
         let from_idx = self
             .node_indices
             .get(&from_id)
-            .ok_or_else(|| anyhow::anyhow!("Source node {} not found", from_id))?;
+            .ok_or_else(|| NodesNotFoundError::from(&[from_id] as &[usize]))?;
         let to_idx = self
             .node_indices
             .get(&to_id)
-            .ok_or_else(|| anyhow::anyhow!("Target node {} not found", to_id))?;
+            .ok_or_else(|| NodesNotFoundError::from(&[to_id] as &[usize]))?;
         self.dag
             .add_edge(
                 *from_idx,
@@ -107,7 +105,7 @@ impl Graph {
                     target_input,
                 },
             )
-            .map_err(|e| anyhow::anyhow!("Failed to add edge: {:?}", e))?;
+            .map_err(|e| EdgeCreationError::CycleError(e))?;
 
         Ok(())
     }
@@ -118,7 +116,7 @@ impl Graph {
     /// input requirements.
     // TODO: Return a NodeOutput with all the results.
     // TODO: This may call things redundantly that don't have to be (eg, if an urgent node is a dep for another urgent node)
-    pub fn execute(&self, registry: &mut Registry) -> anyhow::Result<()> {
+    pub fn execute(&self, registry: &mut Registry) -> Result<(), Error<NodeExecutionError>> {
         // Find all urgent nodes
         let mut urgent_nodes = Vec::new();
 
@@ -126,22 +124,24 @@ impl Graph {
             let node_id = *self
                 .dag
                 .node_weight(*idx)
-                .ok_or_else(|| anyhow::anyhow!("Node not found in graph"))?;
+                .ok_or_else(|| Error::from(NodeExecutionError::from(NodeNotFoundInGraphError::from(*idx))))
+                .map_err(|err| err.with_trace(self.generate_trace(registry, vec![], vec![])))?;
 
-            let node = registry.get(node_id)?;
+            let node = match registry.get(node_id) {
+                Some(node) => node,
+                None => {
+                    return Err(Error::from(NodeExecutionError::from(NodesNotFoundError::from(&[node_id] as &[usize])))
+                        .with_trace(self.generate_trace(registry, vec![], vec![])));
+                }
+            };
             if node.eval_strategy() == EvalStrategy::Urgent {
                 urgent_nodes.push(idx);
             }
         }
 
-        if urgent_nodes.is_empty() {
-            return Err(anyhow::anyhow!("No urgent nodes found in graph"));
-        }
-
         // Execute all urgent nodes (which will recursively execute dependencies)
         for node_idx in urgent_nodes {
-            self.execute_node(*node_idx, registry)
-                .map_err(|e| anyhow::anyhow!(e))?;
+            self.execute_node(*node_idx, registry)?;
         }
 
         Ok(())
@@ -149,12 +149,16 @@ impl Graph {
 
     /// Execute a single node's stage within the graph. This will recursively execute
     /// all dependant parent nodes.
-    fn execute_node(&self, idx: NodeIndex, registry: &mut Registry) -> anyhow::Result<()> {
+    fn execute_node(&self, idx: NodeIndex, registry: &mut Registry) -> Result<(), Error<NodeExecutionError>> {
         // Get the node ID
         let &node_id = self
             .dag
             .node_weight(idx)
-            .ok_or_else(|| anyhow::anyhow!("Node not found in graph"))?;
+            .ok_or_else(|| Error::from(NodeExecutionError::from(NodeNotFoundInGraphError::from(idx))))
+            .map_err(|err| err.with_trace(self.generate_trace(registry, vec![], vec![])))?;
+
+        // TODO: Better if we don't have to do this here
+        let top_trace = self.generate_trace(registry, vec![], vec![]);
 
         // First execute all parent nodes
         for parent in self.dag.parents(idx).iter(&self.dag) {
@@ -166,31 +170,46 @@ impl Graph {
             let parent_idx = parent.1;
             let edge_idx = parent.0;
 
-            let edge_info = self
-                .dag
-                .edge_weight(edge_idx)
-                .ok_or_else(|| anyhow::anyhow!("Edge data not found"))?;
-
             let &parent_id = self
                 .dag
                 .node_weight(parent_idx)
-                .ok_or_else(|| anyhow::anyhow!("Parent node not found in graph"))?;
+                .ok_or_else(|| Error::from(NodeExecutionError::from(NodeNotFoundInGraphError::from(parent_idx))))
+                .map_err(|err| err.with_trace(top_trace.clone()))?;
 
-            let (node, parent_node) = registry.get2_mut(node_id, parent_id)?;
+            let edge_info = self
+                .dag
+                .edge_weight(edge_idx)
+                .ok_or_else(|| Error::from(NodeExecutionError::from(EdgeNotFoundInGraphError::from(edge_idx))))
+                .map_err(|err| err.with_trace(self.generate_trace(registry, vec![parent_id, node_id], vec![])))?;
+
+            let (node, parent_node) = registry.get2_mut(node_id, parent_id)
+                .map_err(|err| Error::from(NodeExecutionError::from(err)))
+                .map_err(|err| err.with_trace(top_trace.clone()))?;
 
             node.flow_data(
                 parent_node,
                 edge_info.source_output.clone(),
                 edge_info.target_input.clone(),
-            )?;
+            ).map_err(|err| Error::from(NodeExecutionError::from(err)))
+             .map_err(|err| err.with_trace(self.generate_trace(registry, vec![parent_id, node_id], vec![(parent_id, edge_info.source_output.clone(), node_id, edge_info.target_input.clone())])))?;
         }
 
+        // Get error trace info before it's too late
+
         // Determine if we need to evaluate
-        let node = registry.get_mut(node_id)?;
+        let node = match registry.get_mut(node_id) {
+            Some(node) => node,
+            None => {
+                return Err(Error::from(NodeExecutionError::from(NodesNotFoundError::from(&[node_id] as &[usize])))
+                    .with_trace(self.generate_trace(registry, vec![], vec![])));
+            }
+        };
         if node.reeval_rule() == ReevaluationRule::Move || node.input_changed() {
             // TODO: Do something with the previous outputs, which are returned here
             // TODO: Handle ReevaluationRule::CacheAll
-            node.eval()?;
+            node.eval()
+                .map_err(|err| Error::from(NodeExecutionError::from(err)))
+                .map_err(|err| err.with_trace(top_trace))?;
             node.set_input_changed(false);
         }
         // TODO: ?

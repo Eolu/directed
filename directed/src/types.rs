@@ -49,20 +49,44 @@ impl NodeOutput {
 }
 
 /// Associates a name with a type, internal detail
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Eq, PartialOrd, Ord)]
 pub struct DataLabel {
-    name: std::borrow::Cow<'static, str>,
+    pub(crate) name: std::borrow::Cow<'static, str>,
+    /// This is for informational purposes, discluded from PartialEq and Hash
+    pub(crate) type_name: Option<std::borrow::Cow<'static, str>>,
 }
+
+impl PartialEq for DataLabel {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl std::hash::Hash for DataLabel {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
 impl DataLabel {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: std::borrow::Cow::from(name.into()),
+            type_name: None,
         }
     }
 
     pub const fn new_const(name: &'static str) -> Self {
         Self {
             name: std::borrow::Cow::Borrowed(name),
+            type_name: None,
+        }
+    }
+
+    pub const fn new_with_type_name(name: &'static str, type_name: &'static str) -> Self {
+        Self {
+            name: std::borrow::Cow::Borrowed(name),
+            type_name: Some(std::borrow::Cow::Borrowed(type_name)),
         }
     }
 

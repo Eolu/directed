@@ -1,5 +1,4 @@
 //! Nodes contain all logic and state, but no information on order of execution.
-use anyhow::anyhow;
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -7,9 +6,7 @@ use std::{
 };
 
 use crate::{
-    RefType,
-    stage::{EvalStrategy, ReevaluationRule, Stage},
-    types::{DataLabel, NodeOutput},
+    stage::{EvalStrategy, ReevaluationRule, Stage}, types::{DataLabel, NodeOutput}, InjectionError, RefType
 };
 
 /// Used for single-output functions
@@ -53,7 +50,7 @@ pub trait AnyNode: Any {
     /// USed to get mutable access to state
     fn as_any_mut(&mut self) -> &mut dyn Any;
     /// Evaluates the node. Returns a map of prior outputs
-    fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>>;
+    fn eval(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError>;
     fn eval_strategy(&self) -> EvalStrategy;
     fn reeval_rule(&self) -> ReevaluationRule;
     /// Set the outputs and return any existing outputs.
@@ -62,7 +59,7 @@ pub trait AnyNode: Any {
         &mut self,
         key: &DataLabel,
         output: Arc<dyn Any + Send + Sync>,
-    ) -> anyhow::Result<Option<Arc<dyn Any + Send + Sync>>>;
+    ) -> Result<Option<Arc<dyn Any + Send + Sync>>, InjectionError>;
     /// This a a core part of the plumbing of this crate - take the outputs of
     /// a parent node and use them to set the inputs of a child node.
     fn flow_data(
@@ -70,7 +67,7 @@ pub trait AnyNode: Any {
         parent: &mut Box<dyn AnyNode>,
         output: DataLabel,
         input: DataLabel,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<(), InjectionError>;
     /// Used to support `[Self::flow_data]`
     fn inputs_mut(
         &mut self,
@@ -83,6 +80,9 @@ pub trait AnyNode: Any {
     fn set_input_changed(&mut self, val: bool);
     /// See `[Self::set_input_changed]`
     fn input_changed(&self) -> bool;
+    fn input_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>>;
+    fn output_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>>;
+    fn stage_name(&self) -> &str;
 }
 
 impl<S: Stage + 'static> AnyNode for Node<S> {
@@ -110,28 +110,21 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
         &mut self,
         key: &DataLabel,
         output: Arc<dyn Any + Send + Sync>,
-    ) -> anyhow::Result<Option<Arc<dyn Any + Send + Sync>>> {
+    ) -> Result<Option<Arc<dyn Any + Send + Sync>>, InjectionError> {
         let output_type = self
             .stage
             .outputs()
             .get(key)
-            .ok_or_else(|| anyhow!("Attempted to access invalid output: {key:?}"))?;
+            .ok_or_else(|| InjectionError::OutputNotFound(key.clone()))?;
         match (&*output).type_id() {
-            id if id == TypeId::of::<NodeOutput>() => {
-                panic!("Unprocessed Output: {key:?}")
-            }
             id if id != *output_type => {
-                return Err(anyhow!(
-                    "Incorrectly attempted to set output '{key:?}' '({:?})' as type '{:?}'",
-                    id,
-                    output_type
-                ));
+                return Err(InjectionError::OutputTypeMismatch(key.clone()));
             }
             _ => Ok(self.outputs.insert(key.clone(), output)),
         }
     }
 
-    fn eval(&mut self) -> anyhow::Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>> {
+    fn eval(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError> {
         let mut old_outputs = HashMap::new();
         // TODO: This stage clone is silly spaghetti
         let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs)?;
@@ -158,7 +151,7 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
         parent: &mut Box<dyn AnyNode>,
         output: DataLabel,
         input: DataLabel,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), InjectionError> {
         let stage_clone = self.stage.clone();
         stage_clone.inject_input(self, parent, output, input)
     }
@@ -183,5 +176,17 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
 
     fn input_reftype(&self, name: &DataLabel) -> Option<RefType> {
         self.stage.inputs().get(name).map(|input| input.1)
+    }
+    
+    fn input_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>> {
+        self.stage.inputs().keys().cloned()
+    }
+    
+    fn output_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>> {
+        self.stage.outputs().keys().cloned()
+    }
+    
+    fn stage_name(&self) -> &str {
+        self.stage.name()
     }
 }

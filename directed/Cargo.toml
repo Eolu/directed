@@ -7,7 +7,6 @@ license = "MIT"
 
 [dependencies]
 directed-stage-macro = { version = "0.1.2", path = "../directed-stage-macro" }
-anyhow = "1.0"
 daggy = "0.9"
 slab = "0.4"
 thiserror = "2.0"

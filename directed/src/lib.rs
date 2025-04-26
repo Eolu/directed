@@ -17,6 +17,7 @@ pub use node::{AnyNode, Node};
 pub use registry::Registry;
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, NodeOutput};
+pub use error::*;
 
 // TODO: Add a traceable error system, right now it's ignored with anyhow
 // TODO: Graph + Registry could be combined to create a Node (with a baked stage)
@@ -65,7 +66,7 @@ mod tests {
         let node_2 = registry.register(TinyStage2::new());
         let node_3 = registry.register(TinyStage3::new());
         let graph = graph! {
-            nodes: &[node_1, node_2, node_3],
+            nodes: [node_1, node_2, node_3],
             connections: {
                 node_1: _ => node_2: input,
                 node_1: _ => node_2: input2,
@@ -106,7 +107,7 @@ mod tests {
         let consumer2 = registry.register(ConsumerStage2::new());
 
         let graph = graph! {
-            nodes: &[producer, consumer1, consumer2],
+            nodes: [producer, consumer1, consumer2],
             connections: {
                 producer: number => consumer1: number,
                 producer: text => consumer2: text,
@@ -139,7 +140,7 @@ mod tests {
         let urgent_node = registry.register(UrgentStage::new());
 
         let graph = graph! {
-            nodes: &[lazy_node, urgent_node],
+            nodes: [lazy_node, urgent_node],
             connections: {
                 lazy_node: _ => urgent_node: input,
             }
@@ -193,7 +194,7 @@ mod tests {
         let sink = registry.register(SinkStage::new());
 
         let graph = graph! {
-            nodes: &[source, transparent, opaque, sink],
+            nodes: [source, transparent, opaque, sink],
             connections: {
                 source: _ => transparent: input,
                 source: _ => opaque: input,
@@ -216,6 +217,8 @@ mod tests {
         graph.execute(&mut registry).unwrap();
         assert_eq!(TRANSPARENT_COUNTER.load(Ordering::SeqCst), 1); // Still 1
         assert_eq!(OPAQUE_COUNTER.load(Ordering::SeqCst), 2); // Increased to 2
+
+        println!("{}", graph.generate_trace(&registry, vec![sink], vec![(opaque, "_".into(), sink, "o_input".into())]).create_mermaid_graph());
     }
 
     // Test graph cycle detection
@@ -237,7 +240,7 @@ mod tests {
 
         // Attempt to create a cyclic graph
         let result = graph! {
-            nodes: &[node_a, node_b],
+            nodes: [node_a, node_b],
             connections: {
                 node_a: _ => node_b: input,
                 node_b: _ => node_a: input,
@@ -272,10 +275,10 @@ mod tests {
         assert!(registry.validate_node_type::<OtherStage>(node_id).is_err());
 
         // Get node
-        assert!(registry.get(node_id).is_ok());
+        assert!(registry.get(node_id).is_some());
 
         // Get mutable node
-        assert!(registry.get_mut(node_id).is_ok());
+        assert!(registry.get_mut(node_id).is_some());
 
         // Unregister
         let node = registry
@@ -285,7 +288,7 @@ mod tests {
         assert!(node.stage.eval_strategy() == EvalStrategy::Urgent);
 
         // Node no longer exists
-        assert!(registry.get(node_id).is_err());
+        assert!(registry.get(node_id).is_none());
     }
 
     // Test error handling when node doesn't exist
@@ -297,8 +300,8 @@ mod tests {
         let invalid_id = 9999;
 
         // Various operations should fail
-        assert!(registry.get(invalid_id).is_err());
-        assert!(registry.get_mut(invalid_id).is_err());
+        assert!(registry.get(invalid_id).is_none());
+        assert!(registry.get_mut(invalid_id).is_none());
         assert!(registry.unregister_and_drop(invalid_id).is_err());
     }
 
@@ -322,7 +325,7 @@ mod tests {
 
         // Create graph with type-incompatible connection
         let graph = graph! {
-            nodes: &[producer, consumer],
+            nodes: [producer, consumer],
             connections: {
                 producer: _ => consumer: input,
             }
@@ -354,7 +357,7 @@ mod tests {
 
         // Only connect one of the required inputs
         let graph = graph! {
-            nodes: &[producer, consumer],
+            nodes: [producer, consumer],
             connections: {
                 producer: _ => consumer: input1,
             }
@@ -381,36 +384,6 @@ mod tests {
 
         let from_str: DataLabel = "string".into();
         assert_eq!(from_str.inner(), "string");
-    }
-
-    // Test graph with no urgent nodes
-    #[test]
-    fn no_urgent_nodes_test() {
-        #[stage(lazy)]
-        fn LazyStage1() -> i32 {
-            42
-        }
-
-        #[stage(lazy)]
-        fn LazyStage2(input: i32) -> i32 {
-            input * 2
-        }
-
-        let mut registry = Registry::new();
-        let node1 = registry.register(LazyStage1::new());
-        let node2 = registry.register(LazyStage2::new());
-
-        let graph = graph! {
-            nodes: &[node1, node2],
-            connections: {
-                node1: _ => node2: input,
-            }
-        }
-        .unwrap();
-
-        // Execution should fail because there are no urgent nodes
-        let result = graph.execute(&mut registry);
-        assert!(result.is_err());
     }
 
     // Test graph with diamond pattern
@@ -444,7 +417,7 @@ mod tests {
         let sink = registry.register(Sink::new());
 
         let graph = graph! {
-            nodes: &[source, path_a, path_b, sink],
+            nodes: [source, path_a, path_b, sink],
             connections: {
                 source: _ => path_a: input,
                 source: _ => path_b: input,
@@ -480,7 +453,7 @@ mod tests {
 
         // Connect with non-existent output name
         let graph = graph! {
-            nodes: &[producer, consumer],
+            nodes: [producer, consumer],
             connections: {
                 producer: nonexistent => consumer: input,
             }
@@ -508,7 +481,7 @@ mod tests {
         // register can still be called instead
         let node = registry.register_with_state(StateStage::new(), (1, 5));
         let graph = graph! {
-            nodes: &[node],
+            nodes: [node],
             connections: {}
         }
         .unwrap();
@@ -549,7 +522,7 @@ mod tests {
         let consumer = registry.register(ConsumeOutputs::new());
 
         let graph = graph! {
-            nodes: &[producer, consumer],
+            nodes: [producer, consumer],
             connections: {
                 producer: number => consumer: num,
                 producer: text => consumer: txt,

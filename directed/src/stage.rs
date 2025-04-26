@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     node::{AnyNode, Node},
-    types::{DataLabel, NodeOutput},
+    types::{DataLabel, NodeOutput}, InjectionError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
@@ -32,7 +32,7 @@ pub trait Stage: Clone {
         &self,
         state: &mut Self::State,
         inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-    ) -> anyhow::Result<NodeOutput>;
+    ) -> Result<NodeOutput, InjectionError>;
 
     fn eval_strategy(&self) -> EvalStrategy {
         EvalStrategy::Lazy
@@ -50,7 +50,10 @@ pub trait Stage: Clone {
         parent: &mut Box<dyn AnyNode>,
         output: DataLabel,
         input: DataLabel,
-    ) -> Result<(), anyhow::Error>;
+    ) -> Result<(), InjectionError>;
+
+    /// Stage name, used for debugging information
+    fn name(&self) -> &str;
 
     /// Pointer to the function this wraps
     fn get_fn() -> Self::BaseFn;
