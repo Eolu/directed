@@ -8,6 +8,8 @@ use syn::{
     punctuated::Punctuated,
 };
 
+// TODO: `inject_input` implementation is unruly and violates DRY in silly ways. It could be simplified a lot.
+
 /// A macro that wraps a function with the standardized interface:
 /// fn fn_name(&mut DataMap, &DataMap) -> Result<DataMap>
 ///
@@ -628,7 +630,6 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 #reevaluation_rule
             }
 
-            // TODO: This can be simplified to be a bit less unruly
             fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
                 fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
                     match input.inner() {

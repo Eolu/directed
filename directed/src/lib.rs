@@ -33,7 +33,7 @@ mod tests {
         #[stage(lazy, cache_last)]
         fn TinyStage2(input: String, input2: String) -> String {
             println!("Running stage 2");
-            input.to_uppercase() + " [" + &input.chars().count().to_string() + " chars]"
+            input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
         }
 
         #[stage(cache_last)]

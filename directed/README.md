@@ -32,7 +32,7 @@ When possible, the error types in this crate contain a trace of the graph and ha
 
 ## Current project status
 
-- WIP: Examples work but many intended features are still missing, and the codebase structure is in general in an "under-construction" state. TODOs litered throughout the codebase need to be extracted out into a coherent plan.
+- WIP: Examples work but many intended features are still missing, and the codebase structure is in general in an "under-construction" state. TODOs littered throughout the codebase need to be extracted out into a coherent plan.
 
 ## Core API Concepts
 
@@ -129,7 +129,7 @@ fn TinyStage1() -> String {
 #[stage(lazy)]
 fn TinyStage2(input: String, input2: String) -> String {
     println!("Running stage 2");
-    input.to_uppercase() + " [" + &input.chars().count().to_string() + " chars]"
+    input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars in 2nd string]"
 }
 
 #[stage]
