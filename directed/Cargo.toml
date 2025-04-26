@@ -1,12 +1,12 @@
 [package]
 name = "directed"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Evaluate programs based on Directed Acrylic Graphs"
 license = "MIT"
 
 [dependencies]
-directed-stage-macro = { version = "0.1.2", path = "../directed-stage-macro" }
+directed-stage-macro = { version = "0.1.3", path = "../directed-stage-macro" }
 daggy = "0.9"
 slab = "0.4"
 thiserror = "2.0"
