@@ -1,6 +1,6 @@
 # directed
 
-This crate is a Directed-Acrylic-Graph (DAG)-based execution system for Rust. It allows you to wrap functions in a way that converts them into stateful Nodes in a graph. These can then be executed in the shortest-path to be able to evaluate one or more output nodes. Inputs and outputs can be cached (memoization), and nodes can have internal state (or not, anything can be stateless as well). Graph connections can be rewired at runtime without the loss of node state.
+This crate is a Directed-Acyclic-Graph (DAG)-based execution system for Rust. It allows you to wrap functions in a way that converts them into stateful Nodes in a graph. These can then be executed in the shortest-path to be able to evaluate one or more output nodes. Inputs and outputs can be cached (memoization), and nodes can have internal state (or not, anything can be stateless as well). Graph connections can be rewired at runtime without the loss of node state.
 
 Here is a visualization of a trivial program structure using this:
 ```mermaid

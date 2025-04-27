@@ -1,8 +1,8 @@
 [package]
 name = "directed"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
-description = "Evaluate programs based on Directed Acrylic Graphs"
+description = "Evaluate programs based on Directed Acyclic Graphs"
 license = "MIT"
 authors = ["Griffin O'Neill <gsoneill1003@gmail.com>"]
 keywords = ["graph", "DAG", "DSL"]
