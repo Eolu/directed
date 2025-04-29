@@ -67,6 +67,34 @@ fn MultiOutputStage() -> NodeOutput {
 }
 ```
 
+#### State
+
+Stages can be annotated with `state`. This will indicate a type that can be used to store internal state for the node. This could also be used to store some kind of configuration for the node that might be modified outside the graph's evaluation time. State is never accessed by other nodes or transferred throughout the graph in any way:
+```rust
+use directed::*;
+
+// Example state struct (any type can be used)
+#[derive(Default)]
+struct SomeState {
+    num_times_run: u32
+}
+
+// Use `state(TypeOfState)` to indicate the usage of state
+#[stage(state(SomeState))]
+fn StatefulStage() -> String {
+    // this will automatically put an '&mut SomeState' in scope called 'state'
+    let result = if state.num_times_run == 0 {
+        format!("I've never been run!")
+    } else {
+        format!("I've been run {} times.", state.num_times_run)
+    };
+    state.num_times_run += 1;
+    result
+}
+```
+
+It is possible to access or mutate state outside of graph evaluation. See the `Registry` section for more details.
+
 #### Lazy
 Stages can be annotated as `lazy`. This will indicate that it's node will never be evaluated until a child node needs its output to evaluate. Typical graphs will have multiple lazy nodes, and one or possibly a few non-lazy nodes. A graph with only lazy nodes will do nothing at all:
 ```rust
@@ -126,6 +154,25 @@ fn main() {
 }
 ```
 
+### Node State
+
+As mentioned in the `Stage` section, nodes can have internal state. When creating a node, the following methods is provided:
+```rust,ignore
+let mut registry = Registry::new();
+let node_1 = registry.register_with_state(StatefulStage::new(), SomeState { num_times_run: 0 });
+```
+- Note: If `SomeState` implements `Default`, the simple `register` function can be used instead. If no state is explicitly stated, state will simple be set to `()`.
+
+State can also be accessed via one of these methods:
+```rust,ignore
+let mut registry = Registry::new();
+let node_1 = registry.register(StatefulStage::new());
+// Get a reference to internal state
+println!("Node 1 state: {:?}", registry.state(node_1));
+// Get a mutable reference to internal state
+registry.state_mut(node_1).num_times_run = 10;
+```
+
 ### Graph
 
 Putting it all together, the `Graph` struct stores node IDs and the connections between the outputs of nodes to the inputs of other nodes. Creating one is easy, and the `graph` macro exists to make the connections more visually intuitive. See the example below of putting a variety of concepts together and finally making a graph:
@@ -181,6 +228,23 @@ fn main() {
 ```
 
 As stated before, multiple graphs can be created from that same registry, executed in any order.
+
+## Features
+
+### tokio
+
+The `tokio` feature adds async evaluation. This simply means that a node will evaluate all of its parents nodes concurrently before evaluating itself. Enabling this kind of execution is simple:
+- Enable the `tokio` feature
+- Wrap your graph in an `Arc`: `let graph = Arc::new(graph);`
+- Instead of calling `execute`, call `execute_async` on the `Arc<Graph>`.
+
+That's it. Currently, stages can't be marked async, but they can be executed independantly in an async context.
+- TODO: In a future update, stages themselves will be allowed to be async. The docs will go here.
+
+```rust
+
+```
+- TODO: example here
 
 ## WIP features/ideas
 
