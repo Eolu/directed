@@ -1,6 +1,6 @@
 # directed
 
-This crate is a Directed-Acyclic-Graph (DAG)-based execution system for Rust. It allows you to wrap functions in a way that converts them into stateful Nodes in a graph. These can then be executed in the shortest-path to be able to evaluate one or more output nodes. Inputs and outputs can be cached (memoization), and nodes can have internal state (or not, anything can be stateless as well). Graph connections can be rewired at runtime without the loss of node state.
+This crate is a Directed-Acyclic-Graph (DAG)-based evaluation system for Rust. It allows you to wrap functions in a way that converts them into stateful Nodes in a graph. These can then be executed in the shortest-path to be able to evaluate one or more output nodes. Inputs and outputs can be cached (memoization), and nodes can have internal state (or not, anything can be stateless as well). Graph connections can be rewired at runtime without the loss of node state.
 
 Here is a visualization of a trivial program structure using this:
 ```mermaid
@@ -42,6 +42,8 @@ A `Stage` is a wrapped function that can be used to create a `Node`. Think of a 
 
 When a function is annotated with the `#[stage]` macro, it will be converted to a struct of the same name, and given an implementation of the `Stage` trait. For this reason, struct naming conventions should be followed rather than function naming conventions:
 ```rust
+use directed::*;
+
 #[stage]
 fn SimpleStage() -> String {
     String::from("Hello graph!")
@@ -51,6 +53,8 @@ fn SimpleStage() -> String {
 #### Multi-output
 Stages can support multiple named outputs by making use of the `NodeOutput` type and the `output` macro. This can be used to make connections between specific outputs of one node to specific inputs of another:
 ```rust
+use directed::*;
+
 // When multiple outputs exist, they must be specified within 'out'. Syntax is siumilar to typical input arguments.
 #[stage(out(output1: u32, output2: String))]
 fn MultiOutputStage() -> NodeOutput {
@@ -66,6 +70,8 @@ fn MultiOutputStage() -> NodeOutput {
 #### Lazy
 Stages can be annotated as `lazy`. This will indicate that it's node will never be evaluated until a child node needs its output to evaluate. Typical graphs will have multiple lazy nodes, and one or possibly a few non-lazy nodes. A graph with only lazy nodes will do nothing at all:
 ```rust
+use directed::*;
+
 #[stage(lazy)]
 fn LazyStage() -> String {
     String::from("Hello dependant node!")
@@ -75,8 +81,10 @@ fn LazyStage() -> String {
 #### Cache Last
 Stages can be annotated as `cache_last`. This will indicate that if reevaluated with identical inputs to the previous evaluation, it will just return cached outputs without rerunning the function:
 ```rust
+use directed::*;
+
 // If this is run with 31 as an input twice, "to_string" will not be called the 2nd time.
-#[stage(lazy)]
+#[stage(cache_last)]
 fn CacheLastStage(num: u32) -> String {
     num.to_string()
 }
@@ -104,6 +112,8 @@ A `Registry` stores nodes and their state. It's distinctly seperate from `Graph`
 
 Here's an example of creating a registry and adding nodes to it:
 ```rust
+use directed::*;
+
 #[stage]
 fn SimpleStage() -> String {
     String::from("Hello graph!")
@@ -120,6 +130,8 @@ fn main() {
 
 Putting it all together, the `Graph` struct stores node IDs and the connections between the outputs of nodes to the inputs of other nodes. Creating one is easy, and the `graph` macro exists to make the connections more visually intuitive. See the example below of putting a variety of concepts together and finally making a graph:
 ```rust
+use directed::*;
+
 #[stage(lazy, cache_last)]
 fn TinyStage1() -> String {
     println!("Running stage 1");
@@ -135,7 +147,7 @@ fn TinyStage2(input: String, input2: String) -> String {
 #[stage]
 fn TinyStage3(input: String) {
     println!("Running stage 3");
-    assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
+    assert_eq!("THIS IS THE OUTPUT! [19 chars in 2nd string]", input);
 }
 
 fn main() {
@@ -172,7 +184,7 @@ As stated before, multiple graphs can be created from that same registry, execut
 
 ## WIP features/ideas
 
-- async execution support (relatively high priority)
+- async execution works, but there's quite a bit of repeated code from my prototyping efforts still sitting around
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)

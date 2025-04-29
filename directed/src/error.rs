@@ -1,4 +1,4 @@
-//! TODO: Need to simplify all of this
+//! Errors and the graph trace system
 use std::fmt::{self, Display, Formatter, Write};
 use crate::{AnyNode, DataLabel, Graph, Registry};
 
@@ -39,6 +39,9 @@ pub enum NodeExecutionError {
     EdgeNotFoundInGraph(#[from] EdgeNotFoundInGraphError),
     #[error(transparent)]
     InputInjection(#[from] InjectionError),
+    #[cfg(feature = "tokio")]
+    #[error(transparent)]
+    JoinError(#[from] tokio::task::JoinError)
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -170,27 +173,27 @@ pub struct ConnectionInfo {
 // Extension to Registry to allow access to nodes by ID
 impl Registry {
     /// Gets a node by its ID.
-    pub fn get_node_by_id(&self, id: usize) -> Option<&dyn AnyNode> {
-        self.0.get(id).map(|node| node.as_ref())
+    pub fn get_node_by_id(&self, id: usize) -> Option<&Box<dyn AnyNode>> {
+        self.0.get(id).map(|node| node.as_ref()).flatten()
     }
 }
 
 impl Graph {
+    // TODO: Highlighting nodes/connections should be amutable operation on GraphTrace, not done here
     /// Generates a trace of the graph.
-    pub fn generate_trace(&self, registry: &Registry, highlighted_nodes: Vec<usize>, highlighted_connections: Vec<(usize, DataLabel, usize, DataLabel)>) -> GraphTrace {
+    pub fn generate_trace(&self, registry: &Registry) -> GraphTrace {
         let mut nodes = Vec::new();
         let mut connections = Vec::new();
 
         // Add node information
         for (&id, _) in &self.node_indices {
             if let Some(node) = registry.get_node_by_id(id) {
-                let highlighted = highlighted_nodes.contains(&id);
                 let node_info = NodeInfo {
                     id,
                     name: node.stage_name().to_string(),
                     inputs: node.input_names().collect(),
                     outputs: node.output_names().collect(),
-                    highlighted
+                    highlighted: false
                 };
                 nodes.push(node_info);
             }
@@ -213,13 +216,12 @@ impl Graph {
             if let (Some(source_id), Some(target_id)) = (source_id, target_id) {
                 let source_output = edge.weight.source_output.clone();
                 let target_input = edge.weight.target_input.clone();
-                let highlighted = highlighted_connections.contains(&(source_id, source_output.clone(), target_id, target_input.clone()));
                 let connection_info = ConnectionInfo {
                     source_id,
                     source_output,
                     target_id,
                     target_input,
-                    highlighted
+                    highlighted: false
                 };
                 connections.push(connection_info);
             }
@@ -230,6 +232,21 @@ impl Graph {
 }
 
 impl GraphTrace {
+
+    /// Emphasizes a node in the trace
+    pub fn highlight_node(&mut self, node: usize) {
+        if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node) {
+            node.highlighted = true;
+        }
+    }
+
+    /// Emphasizes a connection in the trace
+    pub fn highlight_connection(&mut self, source_node: usize, source_output: DataLabel, target_node: usize, target_input: DataLabel) {
+        if let Some(conn) = self.connections.iter_mut().find(|conn| conn.source_id == source_node && conn.source_output == source_output && conn.target_id == target_node && conn.target_input == target_input) {
+            conn.highlighted = true;
+        }
+    }
+
     /// Creates a mermaid graph representing the graph.
     pub fn create_mermaid_graph(&self) -> String {
         const EMPHASIS_STYLE: &str = "stroke:yellow,stroke-width:3;";

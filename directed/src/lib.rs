@@ -198,8 +198,6 @@ mod tests {
         graph.execute(&mut registry).unwrap();
         assert_eq!(TRANSPARENT_COUNTER.load(Ordering::SeqCst), 1); // Still 1
         assert_eq!(OPAQUE_COUNTER.load(Ordering::SeqCst), 2); // Increased to 2
-
-        println!("{}", graph.generate_trace(&registry, vec![sink], vec![(opaque, "_".into(), sink, "o_input".into())]).create_mermaid_graph());
     }
 
     // Test graph cycle detection
@@ -542,5 +540,81 @@ mod tests {
 
         // Unregistering with correct type should succeed
         assert!(registry.unregister::<StageA>(node_a).is_ok());
+    }
+
+    // TODO: Specific test for trace generation
+}
+
+// In src/lib.rs - Add a test for async execution
+#[cfg(all(test, feature = "tokio"))]
+mod async_tests {
+    extern crate self as directed;
+    use super::*;
+    use directed_stage_macro::stage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn parallel_execution_test() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+        #[stage(lazy)]
+        fn SlowStage1() -> i32 {
+            println!("Running SlowStage1");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(1000));
+            42
+        }
+
+        #[stage(lazy)]
+        fn SlowStage2() -> String {
+            println!("Running SlowStage2");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(1000));
+            "hello".to_string()
+        }
+
+        #[stage]
+        fn CombineStage(as_num: i32, as_text: String) -> String {
+            println!("Running CombineStage");
+            format!("{} {}", as_text, as_num)
+        }
+
+        let mut registry = Registry::new();
+        let stage1 = registry.register(SlowStage1::new());
+        let stage2 = registry.register(SlowStage2::new());
+        let combine = registry.register(CombineStage::new());
+
+        println!("Node {stage1} is SlowStage1");
+        println!("Node {stage2} is SlowStage2");
+        println!("Node {combine} is CombineStage");
+
+        let graph = graph! {
+            nodes: [stage1, stage2, combine],
+            connections: {
+                stage1: _ => combine: as_num,
+                stage2: _ => combine: as_text,
+            }
+        }
+        .unwrap();
+        let graph = std::sync::Arc::new(graph);
+
+        // Reset counter
+        COUNTER.store(0, Ordering::SeqCst);
+
+        // Time the execution
+        let start = std::time::Instant::now();
+        graph.execute_async(tokio::sync::Mutex::new(registry)).await.unwrap();
+        let elapsed = start.elapsed();
+
+        // Both slow stages should have been executed
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+
+        println!("Execution completed in {:?}", elapsed);
+        
+        // The execution should take less than 2000ms (if the stages ran in parallel)
+        // but give some wiggle room for test environment variability
+        assert!(elapsed < Duration::from_millis(1900), 
+                "Execution took {:?}, should be less than 190ms if parallel", elapsed);
     }
 }

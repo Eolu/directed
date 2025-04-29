@@ -42,7 +42,8 @@ impl<S: Stage> Node<S> {
 /// This is used to type-erase a node. It's public because the macro needs to
 /// use this, but there should be no reason anyone should manually implement
 /// this.
-pub trait AnyNode: Any {
+#[cfg_attr(feature = "tokio", async_trait::async_trait)]
+pub trait AnyNode: Any + Send + 'static {
     /// Upcast to `dyn Any` to get its more-specific downcast capabilities
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
     /// Primarily used for internal checks
@@ -51,6 +52,8 @@ pub trait AnyNode: Any {
     fn as_any_mut(&mut self) -> &mut dyn Any;
     /// Evaluates the node. Returns a map of prior outputs
     fn eval(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError>;
+    #[cfg(feature = "tokio")]
+    async fn eval_async(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError>;
     fn eval_strategy(&self) -> EvalStrategy;
     fn reeval_rule(&self) -> ReevaluationRule;
     /// Set the outputs and return any existing outputs.
@@ -64,7 +67,7 @@ pub trait AnyNode: Any {
     /// a parent node and use them to set the inputs of a child node.
     fn flow_data(
         &mut self,
-        parent: &mut Box<dyn AnyNode>,
+        child: &mut Box<dyn AnyNode>,
         output: DataLabel,
         input: DataLabel,
     ) -> Result<(), InjectionError>;
@@ -85,7 +88,9 @@ pub trait AnyNode: Any {
     fn stage_name(&self) -> &str;
 }
 
-impl<S: Stage + 'static> AnyNode for Node<S> {
+#[cfg_attr(feature = "tokio", async_trait::async_trait)]
+impl<S: Stage + Send + 'static> AnyNode for Node<S> 
+    where S::State: Send {
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         Box::new(*self)
     }
@@ -146,14 +151,36 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
         Ok(old_outputs)
     }
 
+    #[cfg(feature = "tokio")]
+    async fn eval_async(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError> {
+        let mut old_outputs = HashMap::new();
+        // TODO: This stage clone is silly spaghetti
+        let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs)?;
+
+        match outputs {
+            NodeOutput::Standard(val) => {
+                if let Some(old_output) = self.replace_output(&UNNAMED_OUTPUT_NAME, val)? {
+                    old_outputs.insert(UNNAMED_OUTPUT_NAME, old_output);
+                }
+            }
+            NodeOutput::Named(hash_map) => {
+                for (key, val) in hash_map.into_iter() {
+                    if let Some(old_output) = self.replace_output(&key, val)? {
+                        old_outputs.insert(key, old_output);
+                    }
+                }
+            }
+        }
+        Ok(old_outputs)
+    }
+
     fn flow_data(
         &mut self,
-        parent: &mut Box<dyn AnyNode>,
+        child: &mut Box<dyn AnyNode>,
         output: DataLabel,
         input: DataLabel,
     ) -> Result<(), InjectionError> {
-        let stage_clone = self.stage.clone();
-        stage_clone.inject_input(self, parent, output, input)
+        self.stage.clone().inject_input(self, child, output, input)
     }
 
     fn inputs_mut(

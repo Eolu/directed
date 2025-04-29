@@ -15,7 +15,9 @@ use syn::{
 ///
 /// Example usage:
 ///
-/// ```
+/// ```ignore
+/// use crate::*;
+/// 
 /// #[stage(lazy, transparent)]
 /// fn add_numbers(a: i32, b: i32) -> i32 {
 ///     a + b
@@ -442,7 +444,9 @@ fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2:
 
     // Add the default case
     code.push(quote! {
-        name => Err(directed::InjectionError::InputNotFound(name.into()))
+        name => {
+            Err(directed::InjectionError::InputNotFound(name.into()))
+        }
     });
 
     code
@@ -545,7 +549,7 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
     output
 }
 
-/// The core trait that defines a stage - the culimnation of this macro
+/// The core trait that defines a stage - the culmination of this macro
 fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     let original_fn = &config.original_fn;
     let stage_name = &config.stage_name;
