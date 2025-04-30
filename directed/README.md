@@ -246,9 +246,8 @@ That's it. Currently, stages can't be marked async, but they can be executed ind
 ```
 - TODO: example here
 
-## WIP features/ideas
+## WIP features/ideas/TODOs
 
-- async execution works, but there's quite a bit of repeated code from my prototyping efforts still sitting around
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)
@@ -260,3 +259,4 @@ That's it. Currently, stages can't be marked async, but they can be executed ind
 - Automatic validators to make sure correct input and output types are present if required
 - Caching ALL possible input combinations, not just previous (cache_all)
 - A way to reset all registry state at once
+- Handle when a node is unavailable from the registry in async execution (wait until it's available again)

@@ -19,11 +19,11 @@ pub(crate) const UNNAMED_OUTPUT_NAME: DataLabel = DataLabel::new_const("_");
 #[derive(Debug)]
 pub struct Node<S: Stage> {
     pub(super) stage: S,
-    // Arbitrary state, by default will be (). Can be used to make nodes even
-    // MORE stateful.
+    // Arbitrary state, by default will be ()
     pub(super) state: S::State,
     pub(super) inputs: HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
     pub(super) outputs: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
+    pub(super) cache: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
     pub(super) input_changed: bool,
 }
 
@@ -34,6 +34,7 @@ impl<S: Stage> Node<S> {
             state: initial_state,
             inputs: HashMap::new(),
             outputs: HashMap::new(),
+            cache: HashMap::new(),
             input_changed: true,
         }
     }
