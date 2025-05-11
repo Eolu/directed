@@ -34,6 +34,12 @@ impl NodeOutput {
         Self::Standard(Arc::new(value))
     }
 
+    /// Wraps a single return value. Note that calling "add" on this afterwards
+    /// will result in a panic.
+    pub fn dyn_new_simple(value: Arc<dyn Any + Send + Sync>) -> Self {
+        Self::Standard(value)
+    }
+
     /// Adds an additional output. Will panic if this was instantiated to
     /// represent a single output.
     pub fn add<T: Send + Sync + 'static>(mut self, name: &str, value: T) -> Self {
@@ -43,6 +49,20 @@ impl NodeOutput {
             NodeOutput::Standard(_) => panic!("Attempted to add '{name}' to a simple output"),
             NodeOutput::Named(hash_map) => {
                 hash_map.insert(DataLabel::new(name), Arc::new(value));
+            }
+        }
+        self
+    }
+
+    /// Adds an additional output. Will panic if this was instantiated to
+    /// represent a single output.
+    pub fn dyn_add(mut self, name: &str, value: Arc<dyn Any + Send + Sync>) -> Self {
+        match &mut self {
+            // This panic is the primary reason direct interaction with this
+            // type is not recommended
+            NodeOutput::Standard(_) => panic!("Attempted to add '{name}' to a simple output"),
+            NodeOutput::Named(hash_map) => {
+                hash_map.insert(DataLabel::new(name), value);
             }
         }
         self

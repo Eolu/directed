@@ -158,6 +158,10 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
             .ok_or_else(|| InjectionError::OutputNotFound(key.clone()))?;
         match (&*output).type_id() {
             id if id != *output_type => {
+                println!("Node: {:?}", self.stage_name());
+                println!("Output key: {key:?}");
+                println!("Output type: {output_type:?}, Got: {id:?}");
+                println!("String type: {:?}, Arc<String>: {:?}", TypeId::of::<String>(), TypeId::of::<Arc<String>>());
                 return Err(InjectionError::OutputTypeMismatch(key.clone()));
             }
             _ => Ok(self.outputs.insert(key.clone(), output)),

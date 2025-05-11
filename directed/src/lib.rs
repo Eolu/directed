@@ -554,7 +554,7 @@ mod tests {
         }
 
         #[stage(lazy, cache_all)]
-        fn CacheStage2(input: &String, input2: &String) -> String {
+        fn CacheStage2(input: String, input2: String) -> String {
             println!("Running stage 2");
             COUNTER.fetch_add(1, Ordering::SeqCst);
             input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
@@ -566,10 +566,26 @@ mod tests {
             assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
         }
 
+        #[stage(lazy, cache_all)]
+        fn CacheStage1Alternate() -> String {
+            println!("Running alt stage 1");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            String::from("This is a different output!")
+        }
+
+        #[stage(cache_last)]
+        fn TinyStage3Alternate(input: String) {
+            println!("Running alt stage 3");
+            assert_eq!("THIS IS A DIFFERENT OUTPUT! [27 chars]", input);
+        }
+
         let mut registry = Registry::new();
         let node_1 = registry.register(CacheStage1::new());
         let node_2 = registry.register(CacheStage2::new());
         let node_3 = registry.register(TinyStage3::new());
+        let node_1_alt = registry.register(CacheStage1Alternate::new());
+        let node_3_alt = registry.register(TinyStage3Alternate::new());
+
         let graph1 = graph! {
             nodes: [node_1, node_2, node_3],
             connections: {
@@ -586,22 +602,6 @@ mod tests {
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
 
         // Now with a modified graph, but same stage 2
-        #[stage(lazy, cache_all)]
-        fn CacheStage1Alternate() -> String {
-            println!("Running alt stage 1");
-            COUNTER.fetch_add(1, Ordering::SeqCst);
-            String::from("This is a different output!")
-        }
-
-        #[stage(cache_last)]
-        fn TinyStage3Alternate(input: String) {
-            println!("Running alt stage 3");
-            assert_eq!("THIS IS A DIFFERENT OUTPUT! [27 chars]", input);
-        }
-
-        let node_1_alt = registry.register(CacheStage1Alternate::new());
-        let node_3_alt = registry.register(TinyStage3Alternate::new());
-
         let graph2 = graph! {
             nodes: [node_1_alt, node_2, node_3_alt],
             connections: {
@@ -615,6 +615,8 @@ mod tests {
         graph2.execute(&mut registry).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         graph2.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+        graph1.execute(&mut registry).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
     }
 

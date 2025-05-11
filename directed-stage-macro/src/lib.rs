@@ -1,4 +1,3 @@
-use std::sync::OnceLock;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro_error::proc_macro_error;
@@ -352,10 +351,10 @@ fn generate_extraction_code(inputs: &[InputParam], cache_strategy: (CacheStrateg
         match cache_strategy {
             (CacheStrategy::None, _span) => quote_spanned! {input_span=>
                 // Non-transparent functions never clone, always move
-                let #reeval_name: directed::ReevaluationRule = inputs.get(&directed::DataLabel::new(#clean_arg_name))
-                    .map(|(_, reeval_rule)| *reeval_rule).ok_or_else(|| directed::InjectionError::InputNotFound(#clean_arg_name.into()))?;
+                let #reeval_name: directed::ReevaluationRule = inputs.get(&directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type)))
+                    .map(|(_, reeval_rule)| *reeval_rule).ok_or_else(|| directed::InjectionError::InputNotFound(directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type))))?;
                 let #arg_name: std::sync::Arc<#arg_type> = if #reeval_name == directed::ReevaluationRule::Move {
-                    if let Some((input, _)) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
+                    if let Some((input, _)) = inputs.remove(&directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type))) {
                         let dc = std::sync::Arc::downcast::<#arg_type>(input);
                         match dc {
                             Ok(val) => val,
@@ -363,28 +362,28 @@ fn generate_extraction_code(inputs: &[InputParam], cache_strategy: (CacheStrateg
                             Err(e) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
                         }
                     } else {
-                        return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
+                        return Err(directed::InjectionError::InputNotFound(directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type))));
                     }
                 } else {
-                    if let Some((input, _)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
+                    if let Some((input, _)) = inputs.get(&directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type))) {
                         match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
                             Ok(val) => val,
                             Err(_) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
                         }
                     } else {
-                        return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
+                        return Err(directed::InjectionError::InputNotFound(directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type))));
                     }
                 };
             },
             // TODO: Check if "All" needs something different
             (CacheStrategy::Last, _span) | (CacheStrategy::All, _span) => quote_spanned! {input_span=>
-                let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
+                let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.get(&directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type))) {
                     match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
                         Ok(val) => (val, *reeval_rule),
                         Err(_) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
                     }
                 } else {
-                    return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
+                    return Err(directed::InjectionError::InputNotFound(directed::DataLabel::new_with_type_name(#clean_arg_name, stringify!(#arg_type))));
                 };
             },
         }
@@ -524,7 +523,7 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
     let downcast_ref_calls = clean_names.iter().zip(arg_types.iter()).zip(arg_names.iter()).map(|((clean_name, arg_type), arg_name)| {
         let name_span = arg_name.span();
         quote_spanned!{name_span=>
-            if let Some(cached_in) = cached.inputs.get(&#clean_name.into()) {
+            if let Some(cached_in) = cached.inputs.get(&directed::DataLabel::new_with_type_name(#clean_name, stringify!(#arg_type))) {
                 if let Some(dc) = in_val.0.downcast_ref::<#arg_type>() {
                     if dc.downcast_eq(&**cached_in) {
                         return true;
@@ -533,6 +532,11 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
             }
         }
     }).collect::<Vec<_>>();
+    // TODO: Get all output types annotated
+    let first_output_type = config.outputs.iter().map(|(_, t, _)| t).cloned().next().unwrap_or(Type::Tuple(syn::TypeTuple {
+        paren_token: syn::token::Paren::default(),
+        elems: Punctuated::new(),
+    }));
     let fn_call = if config.is_multi_output() {
         quote_spanned! {Span::call_site()=>
             Self::get_fn()(state, #(#arg_names),*)
@@ -574,7 +578,7 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
                 // Just use cached values
                 if cached.outputs.len() == 1 && cached.outputs.get(&"_".into()).is_some() {
                     // TODO: Don't panic
-                    Ok(NodeOutput::new_simple(cached.outputs.get(&"_".into()).unwrap().clone()))
+                    Ok(NodeOutput::dyn_new_simple(cached.outputs.get(&"_".into()).unwrap().clone()))
                 } else {
                     let mut result = NodeOutput::new();
                     for (out_name, out_val) in cached.outputs.iter() {
@@ -596,7 +600,7 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
                     }
                     match &result {
                         NodeOutput::Standard(val) => {
-                            cached.outputs.insert("_".into(), val.clone());
+                            cached.outputs.insert(directed::DataLabel::new_with_type_name("_", stringify!(#first_output_type)), val.clone());
                         },
                         NodeOutput::Named(vals) => {
                             for (key, val) in vals {
