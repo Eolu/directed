@@ -32,6 +32,7 @@ pub trait Stage: Clone {
         &self,
         state: &mut Self::State,
         inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
+        cache: &mut HashMap<u64, Vec<crate::Cached>>,
     ) -> Result<NodeOutput, InjectionError>;
 
     fn eval_strategy(&self) -> EvalStrategy {

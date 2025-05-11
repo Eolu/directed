@@ -10,7 +10,7 @@ use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
 use std::collections::HashMap;
 
 use crate::{
-    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, Error, GraphTrace, NodeExecutionError, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError
+    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError
 };
 
 // TODO: Still not perfect, need a nice way to make nodes connections even if they don't have any particular i/o relationship
@@ -116,11 +116,11 @@ impl Graph {
     /// input requirements.
     // TODO: Return a NodeOutput with all the results.
     // TODO: This may call things redundantly that don't have to be (eg, if an urgent node is a dep for another urgent node)
-    pub fn execute(&self, registry: &mut Registry) -> Result<(), Error<NodeExecutionError>> {
+    pub fn execute(&self, registry: &mut Registry) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         let top_trace = self.generate_trace(registry);
         // Execute all urgent nodes (which will recursively execute dependencies)
         for node_idx in self.urgent_nodes(registry)
-            .map_err(Error::from)
+            .map_err(ErrorWithTrace::from)
             .map_err(|err| err.with_trace(top_trace.clone()))? {
             self.execute_node(*node_idx, top_trace.clone(), registry)?;
         }
@@ -130,11 +130,11 @@ impl Graph {
 
     /// Execute the graph asynchronously
     #[cfg(feature = "tokio")]
-    pub async fn execute_async(self: std::sync::Arc<Self>, registry: tokio::sync::Mutex<Registry>) -> Result<(), Error<NodeExecutionError>> {
+    pub async fn execute_async(self: std::sync::Arc<Self>, registry: tokio::sync::Mutex<Registry>) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         let top_trace = self.generate_trace(&*registry.lock().await);
 
         let urgent_nodes = self.urgent_nodes(&*registry.lock().await)
-            .map_err(Error::from)
+            .map_err(ErrorWithTrace::from)
             .map_err(|err| err.with_trace(top_trace.clone()))?;
 
         // Guard the registry with a mutex
@@ -156,10 +156,10 @@ impl Graph {
 
     /// Execute a single node's stage within the graph. This will recursively execute
     /// all dependant parent nodes.
-    fn execute_node(&self, idx: NodeIndex, top_trace: GraphTrace, registry: &mut Registry) -> Result<(), Error<NodeExecutionError>> {
+    fn execute_node(&self, idx: NodeIndex, top_trace: GraphTrace, registry: &mut Registry) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         // Get the node ID
         let node_id = self.get_node_id_from_node_index(idx)
-            .map_err(|err| Error::from(NodeExecutionError::from(err)))
+            .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
             .map_err(|err| err.with_trace(top_trace.clone()))?;
 
         // Get all parent nodes
@@ -175,16 +175,22 @@ impl Graph {
         self.flow_data(registry, top_trace.clone(), node_id, &parents)?;
 
         // Get mutable ref to node
-        let node = registry.get_mut(node_id).ok_or_else(|| Error::from(NodeExecutionError::from(NodesNotFoundError::from(&[node_id] as &[usize])))
+        let node = registry.get_mut(node_id).ok_or_else(|| ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(&[node_id] as &[usize])))
             .with_trace(top_trace.clone()))?;
 
         // Determine if we need to evaluate
         if node.reeval_rule() == ReevaluationRule::Move || node.input_changed() {
             // TODO: Do something with the previous outputs, which are returned here
-            // TODO: Handle ReevaluationRule::CacheAll
-            node.eval()
-                .map_err(|err| Error::from(NodeExecutionError::from(err)))
-                .map_err(|err| err.with_trace(top_trace))?;
+            if node.reeval_rule() == ReevaluationRule::CacheAll {
+                // TODO: Does this make sense? Does the macro handle enough to do nothing special here?
+                node.eval()
+                    .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
+                    .map_err(|err| err.with_trace(top_trace))?;
+            } else {
+                node.eval()
+                    .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
+                    .map_err(|err| err.with_trace(top_trace))?;
+            }
             node.set_input_changed(false);
         }
 
@@ -203,10 +209,10 @@ impl Graph {
     /// all dependant parent nodes in parallel.
     #[cfg(feature = "tokio")]
     #[async_recursion::async_recursion]
-    async fn execute_node_async(self: std::sync::Arc<Self> , idx: NodeIndex, top_trace: GraphTrace, registry: std::sync::Arc<tokio::sync::Mutex<Registry>>) -> Result<(), Error<NodeExecutionError>> {
+    async fn execute_node_async(self: std::sync::Arc<Self> , idx: NodeIndex, top_trace: GraphTrace, registry: std::sync::Arc<tokio::sync::Mutex<Registry>>) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         // Get the node ID
         let node_id = self.get_node_id_from_node_index(idx)
-            .map_err(|err| Error::from(NodeExecutionError::from(err)))
+            .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
             .map_err(|err| err.with_trace(top_trace.clone()))?;
 
         // Get all parent nodes
@@ -234,7 +240,7 @@ impl Graph {
         let mut node = {
             let mut registry = registry.lock().await;
             // Determine if we need to evaluate
-            registry.take_node(node_id).ok_or_else(|| Error::from(NodeExecutionError::from(NodesNotFoundError::from(&[node_id] as &[usize])))
+            registry.take_node(node_id).ok_or_else(|| ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(&[node_id] as &[usize])))
                 .with_trace(top_trace))?
         };
 
@@ -243,7 +249,7 @@ impl Graph {
             // Evaluate asynchronously
             // TODO: Do someting with output
             let _ = node.eval_async().await
-                .map_err(|_| Error::from(NodeExecutionError::from(crate::InjectionError::TooManyReferences("async task failed"))))?;
+                .map_err(|_| ErrorWithTrace::from(NodeExecutionError::from(crate::InjectionError::TooManyReferences("async task failed"))))?;
                 
             node.set_input_changed(false);
         }
@@ -255,7 +261,7 @@ impl Graph {
     }
 
     /// Flow outputs from all parent nodes to a node's inputs
-    fn flow_data(&self, registry: &mut Registry, top_trace: GraphTrace, node_id: usize, parents: &[(EdgeIndex, NodeIndex)]) -> Result<(), Error<NodeExecutionError>> {
+    fn flow_data(&self, registry: &mut Registry, top_trace: GraphTrace, node_id: usize, parents: &[(EdgeIndex, NodeIndex)]) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         for parent in parents {
             let parent_idx = parent.1;
             let edge_idx = parent.0;
@@ -263,13 +269,13 @@ impl Graph {
             let &parent_id = self
                 .dag
                 .node_weight(parent_idx)
-                .ok_or_else(|| Error::from(NodeExecutionError::from(NodeNotFoundInGraphError::from(parent_idx))))
+                .ok_or_else(|| ErrorWithTrace::from(NodeExecutionError::from(NodeNotFoundInGraphError::from(parent_idx))))
                 .map_err(|err| err.with_trace(top_trace.clone()))?;
 
             let edge_info = self
                 .dag
                 .edge_weight(edge_idx)
-                .ok_or_else(|| Error::from(NodeExecutionError::from(EdgeNotFoundInGraphError::from(edge_idx))))
+                .ok_or_else(|| ErrorWithTrace::from(NodeExecutionError::from(EdgeNotFoundInGraphError::from(edge_idx))))
                 .map_err(|err| err.with_trace({
                     let mut trace = top_trace.clone();
                     trace.highlight_node(parent_id);
@@ -278,14 +284,14 @@ impl Graph {
                 }))?;
 
             let (node, parent_node) = registry.get2_mut(node_id, parent_id)
-            .map_err(|err| Error::from(NodeExecutionError::from(err)))
+            .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
             .map_err(|err| err.with_trace(top_trace.clone()))?;
 
             parent_node.flow_data(
                 node,
                 edge_info.source_output.clone(),
                 edge_info.target_input.clone(),
-            ).map_err(|err| Error::from(NodeExecutionError::from(err)))
+            ).map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
             .map_err(|err| err.with_trace({
                 let mut trace = top_trace.clone();
                 trace.highlight_node(parent_id);

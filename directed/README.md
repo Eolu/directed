@@ -124,13 +124,13 @@ Preconditions:
 - Outputs must be `Clone` UNLESS all connected child nodes take input only by reference (runtime error neither of these conditions are met)
 
 #### Cache All
-TODO: Not yet implemented
-
-Once implemented this will do true memoization - for any previously identical input, return the associated output without reevaluating.
+Stages can be annotated with `cache_all`. This means that for any previously identical input, return the associated output without reevaluating.
 
 Preconditions:
 - All previous conditions for `cache_last`
 - All inputs must be `Hash`
+
+TODO: This needs more comprehensive testing. Right now only the most basic scenaria has been tested at all.
 
 ### Registry
 
@@ -248,15 +248,15 @@ That's it. Currently, stages can't be marked async, but they can be executed ind
 
 ## WIP features/ideas/TODOs
 
-- Make a cool visual "rust playgraph" based on this crate
-    - Ability to create stages, and compile
-    - Ability to create nodes from stages, and attach them and execute (without recompiling!)
+- Outside of async some Send+Aync bounds can be relaxed, some Arc usage can be replaced with Rc
 - Improve error system to be cleaner
 - A Graph + Registry could be combined to create a Node (with a baked stage). Right now we combine nodes with stages to make the registry, and registries with graphs. If we could istead combine STAGES with graphs, then output a valid registry full of nodes based on that combination, it would avoid the possibility of combining a registry with an invalid graph entirely.
     - Extended idea: Full graph sharding with support for distributed execution
 - An attribute that makes it serialize the cache and store between runs
 - Accept inputs for top-level nodes, return outputs from leaf nodes
 - Automatic validators to make sure correct input and output types are present if required
-- Caching ALL possible input combinations, not just previous (cache_all)
 - A way to reset all registry state at once
 - Handle when a node is unavailable from the registry in async execution (wait until it's available again)
+- Make a cool visual "rust playgraph" based on this crate
+    - Ability to create stages, and compile
+    - Ability to create nodes from stages, and attach them and execute (without recompiling!)

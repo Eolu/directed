@@ -1,11 +1,9 @@
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use proc_macro_error::proc_macro_error;
-use quote::quote;
+use quote::quote_spanned;
 use syn::{
-    FnArg, ItemFn, Pat, ReturnType, Token, Type,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-    punctuated::Punctuated,
+    parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, spanned::Spanned, FnArg, ItemFn, Pat, ReturnType, Token, Type
 };
 
 // TODO: `inject_input` implementation is unruly and violates DRY in silly ways. It could be simplified a lot.
@@ -48,9 +46,9 @@ pub fn stage(attr: TokenStream, item: TokenStream) -> TokenStream {
 struct StageConfig {
     original_fn: ItemFn,
     stage_name: syn::Ident,
-    is_lazy: bool,
-    cache_strategy: CacheStrategy,
-    outputs: Vec<(String, Type)>,
+    is_lazy: (bool, Span),
+    cache_strategy: (CacheStrategy, Span),
+    outputs: Vec<(String, Type, Span)>,
     inputs: Vec<InputParam>,
     state_type: proc_macro2::TokenStream
 }
@@ -64,9 +62,9 @@ enum RefType {
 impl RefType {
     fn quoted(&self) -> proc_macro2::TokenStream {
         match self {
-            RefType::Owned => quote! { directed::RefType::Owned },
-            RefType::Borrowed => quote! { directed::RefType::Borrowed },
-            RefType::BorrowedMut => quote! { directed::RefType::BorrowedMut },
+            RefType::Owned => quote_spanned! {Span::call_site()=> directed::RefType::Owned },
+            RefType::Borrowed => quote_spanned! {Span::call_site()=> directed::RefType::Borrowed },
+            RefType::BorrowedMut => quote_spanned! {Span::call_site()=> directed::RefType::BorrowedMut },
         }
     }
 }
@@ -76,6 +74,7 @@ struct InputParam {
     type_: Type,
     ref_type: RefType,
     clean_name: String,
+    span: Span
 }
 
 #[derive(Clone)]
@@ -91,14 +90,15 @@ impl Parse for Outputs {
 struct Output {
     name: syn::Ident,
     ty: Type,
+    span: Span,
 }
 
 impl Parse for Output {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let name = input.parse()?;
+        let name: syn::Ident = input.parse()?;
         let _colon_token: Token![:] = input.parse()?;
-        let ty = input.parse()?;
-        Ok(Output { name, ty })
+        let ty: syn::Type = input.parse()?;
+        Ok(Output { name, ty, span: Span::call_site() })
     }
 }
 
@@ -144,7 +144,7 @@ impl Parse for StageArgs {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum CacheStrategy {
     None,
     Last,
@@ -155,18 +155,18 @@ impl StageConfig {
     fn from_args(input_fn: &ItemFn, meta_args: &StageArgs) -> syn::Result<Self> {
         let stage_name = input_fn.sig.ident.clone();
 
-        let mut is_lazy = false;
-        let mut cache_strategy = CacheStrategy::None;
+        let mut is_lazy = (false, Span::call_site());
+        let mut cache_strategy = (CacheStrategy::None, Span::call_site());
         let mut outputs = Vec::new();
-        let mut state_type = quote!(());
+        let mut state_type = quote_spanned!(Span::call_site()=>());
 
         // Process stage attribute arguments
         for arg in meta_args.args.iter() {
             match arg {
                 StageArg::Flag(ident) => match ident.to_string().as_str() {
-                    "lazy" => is_lazy = true,
-                    "cache_last" => cache_strategy = CacheStrategy::Last,
-                    "cache_all" => cache_strategy = CacheStrategy::All,
+                    "lazy" => is_lazy = (true, ident.span()),
+                    "cache_last" => cache_strategy = (CacheStrategy::Last, ident.span()),
+                    "cache_all" => cache_strategy = (CacheStrategy::All, ident.span()),
                     unknown => {
                         return Err(syn::Error::new(
                             ident.span(),
@@ -176,11 +176,11 @@ impl StageConfig {
                 },
                 StageArg::Output(output_defs) => {
                     for output in &output_defs.0 {
-                        outputs.push((output.name.to_string(), output.ty.clone()));
+                        outputs.push((output.name.to_string(), output.ty.clone(), output.span));
                     }
                 },
                 StageArg::State(ty) => {
-                    state_type = quote!(#ty);
+                    state_type = quote_spanned!(ty.span()=>#ty);
                 }
             }
         }
@@ -236,6 +236,7 @@ impl StageConfig {
                         type_: *arg_type.clone(),
                         ref_type,
                         clean_name,
+                        span: arg.span()
                     });
                 }
             }
@@ -246,7 +247,7 @@ impl StageConfig {
 
     fn extract_outputs_from_return_type(
         return_type: &ReturnType,
-    ) -> syn::Result<Vec<(String, Type)>> {
+    ) -> syn::Result<Vec<(String, Type, Span)>> {
         match return_type {
             ReturnType::Type(_, ty) => {
                 // Check if the return type is NodeOutput
@@ -261,7 +262,7 @@ impl StageConfig {
                 }
 
                 // Single output with default name
-                Ok(vec![("_".to_string(), (**ty).clone())])
+                Ok(vec![("_".to_string(), (**ty).clone(), ty.span())])
             }
             ReturnType::Default => {
                 // Return type is (), use default name
@@ -271,6 +272,7 @@ impl StageConfig {
                         paren_token: syn::token::Paren::default(),
                         elems: Punctuated::new(),
                     }),
+                    Span::mixed_site(),
                 )])
             }
         }
@@ -297,8 +299,9 @@ fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::Token
         let arg_name = &input.clean_name;
         let arg_type = &input.type_;
         let ref_type = input.ref_type.quoted();
+        let span = input.span.clone();
         
-        quote! {
+        quote_spanned! {span=>
             inputs.insert(directed::DataLabel::new_with_type_name(#arg_name, stringify!(#arg_type)), (std::any::TypeId::of::<#arg_type>(), #ref_type));
         }
     }).collect()
@@ -310,11 +313,12 @@ fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::Token
 /// simply associate that one type with the name '_'.
 ///
 /// Used to build and validate I/O-based connections
-fn generate_output_registrations(outputs: &[(String, Type)]) -> Vec<proc_macro2::TokenStream> {
+fn generate_output_registrations(outputs: &[(String, Type, Span)]) -> Vec<proc_macro2::TokenStream> {
     outputs
         .iter()
-        .map(|(name, ty)| {
-            quote! {
+        .map(|(name, ty, _span)| {
+            quote_spanned! {Span::call_site()=>
+                // TODO: Fix the fact it can't find outputs here!
                 outputs.insert(directed::DataLabel::new_with_type_name(#name, stringify!(#ty)), std::any::TypeId::of::<#ty>());
             }
         })
@@ -333,57 +337,60 @@ fn true_type(ty: &syn::Type) -> &syn::Type {
 /// This code is used by the wrapper function - it downcasts type-erased
 /// function parameters so that the user-facing function can be called with
 /// concrete types.
-fn generate_extraction_code_move(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
+fn generate_extraction_code(inputs: &[InputParam], cache_strategy: (CacheStrategy, Span)) -> Vec<proc_macro2::TokenStream> {
     inputs.iter().map(|input| {
         let arg_name = &input.name;
         let arg_type = true_type(&input.type_);
         let clean_arg_name = &input.clean_name;
         let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
-        
-        quote! {
-            // Non-transparent functions never clone, always move
-            let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
-                let dc = std::sync::Arc::downcast::<#arg_type>(input);
-                match dc {
-                    Ok(val) => (val, reeval_rule),
-                    Err(e) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
-                }
-            } else {
-                return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
-            };
-        }
-    }).collect()
-}
+        let input_span = input.span.clone();
 
-fn generate_extraction_code_cache_last(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    inputs.iter().map(|input| {
-        let arg_name = &input.name;
-        let arg_type = true_type(&input.type_);
-        let clean_arg_name = &input.clean_name;
-        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
-        
-        quote! {
-            let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
-                match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
-                    Ok(val) => (val, *reeval_rule),
-                    Err(_) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
-                }
-            } else {
-                return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
-            };
+        match cache_strategy {
+            (CacheStrategy::None, _span) => quote_spanned! {input_span=>
+                // Non-transparent functions never clone, always move
+                let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
+                    let dc = std::sync::Arc::downcast::<#arg_type>(input);
+                    match dc {
+                        Ok(val) => (val, reeval_rule),
+                        #[allow(unused_variables)]
+                        Err(e) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
+                    }
+                } else {
+                    return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
+                };
+            },
+            // TODO: Check if "All" needs something different
+            (CacheStrategy::Last, _span) | (CacheStrategy::All, _span) => quote_spanned! {input_span=>
+                let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
+                    match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
+                        Ok(val) => (val, *reeval_rule),
+                        Err(_) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
+                    }
+                } else {
+                    return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
+                };
+            },
         }
+        
     }).collect()
 }
 
 /// This generates the code that uses the output of a parent node to set the
-/// input of a child node. This function is for moves only.
-fn inject_opaque_out(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    let mut code = inputs.iter().map(|input| {
+/// input of a child node.
+fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
+    let mut inject_opaque_out_code = Vec::new();
+    let mut inject_transparent_out_to_owned_in_code = Vec::new();
+    let mut inject_transparent_out_to_opaque_ref_in_code = Vec::new();
+
+    // Build match arms from inputs
+    for input in inputs.iter() {
         let clean_arg_name = &input.clean_name;
-        let arg_type = &input.type_;
-        
-        quote! {
+        let arg_type = true_type(&input.type_);
+        let span = input.span.clone();
+
+        inject_opaque_out_code.push(quote_spanned! {span=>
             #clean_arg_name => {
+                #[allow(unused_variables)]
                 let input_changed = node.input_changed();
                 let output_val = parent.outputs_mut()
                     .remove(&output)
@@ -393,27 +400,10 @@ fn inject_opaque_out(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
                 node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::Move));
                 Ok(())
             }
-        }
-    }).collect::<Vec<_>>();
-
-    // Add the default case
-    code.push(quote! {
-        name => Err(directed::InjectionError::InputNotFound(name.into()))
-    });
-
-    code
-}
-
-/// This generates the code that uses the output of a parent node to set the
-/// input of a child node. An equality comparison will be done between new
-/// output and the previous input, and a flag is raised if they don't match.
-fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    let mut code = inputs.iter().map(|input| {
-        let clean_arg_name = &input.clean_name;
-        let arg_type = true_type(&input.type_);
-        
-        quote! {
+        });
+        inject_transparent_out_to_owned_in_code.push(quote_spanned! {span=>
             #clean_arg_name => {
+                #[allow(unused_variables)]
                 let input_changed = node.input_changed();
                 let output_val = parent.outputs_mut()
                     .get(&output)
@@ -421,7 +411,6 @@ fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2:
                     .clone(); // Clone the Arc
                 let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
                     .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
-                
                 match node.inputs_mut().get(&input) {
                     Some((input_val, _)) => {
                         let input_val = input_val
@@ -439,26 +428,10 @@ fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2:
                 node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::CacheLast));
                 Ok(())
             }
-        }
-    }).collect::<Vec<_>>();
-
-    // Add the default case
-    code.push(quote! {
-        name => {
-            Err(directed::InjectionError::InputNotFound(name.into()))
-        }
-    });
-
-    code
-}
-
-fn inject_transparent_out_to_opaque_ref_in(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    let mut code = inputs.iter().map(|input| {
-        let clean_arg_name = &input.clean_name;
-        let arg_type = true_type(&input.type_);
-        
-        quote! {
+        });
+        inject_transparent_out_to_opaque_ref_in_code.push(quote_spanned! {span=>
             #clean_arg_name => {
+                #[allow(unused_variables)]
                 let input_changed = node.input_changed();
                 let output_val_arc = parent.outputs_mut()
                     .get(&output)
@@ -483,30 +456,149 @@ fn inject_transparent_out_to_opaque_ref_in(inputs: &[InputParam]) -> Vec<proc_ma
                 node.inputs_mut().insert(input, (output_val_ref, directed::ReevaluationRule::CacheLast));
                 Ok(())
             }
-        }
-    }).collect::<Vec<_>>();
+        });
+    }
 
     // Add the default case
-    code.push(quote! {
+    let default_case = quote_spanned! {Span::call_site()=>
         name => Err(directed::InjectionError::InputNotFound(name.into()))
-    });
+    }; 
+    inject_opaque_out_code.push(default_case.clone());
+    inject_transparent_out_to_owned_in_code.push(default_case.clone());
+    inject_transparent_out_to_opaque_ref_in_code.push(default_case);
 
-    code
+    quote_spanned! {Span::call_site()=>
+        fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
+            match input.inner() {
+                #(#inject_opaque_out_code)*
+            }
+        }
+        fn inject_transparent_out_to_owned_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
+            match input.inner() {
+                #(#inject_transparent_out_to_owned_in_code)*
+            }
+        }
+        fn inject_transparent_out_to_opaque_ref_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
+            match input.inner() {
+                #(#inject_transparent_out_to_opaque_ref_in_code)*
+            }
+        }
+
+        if parent.reeval_rule() == directed::ReevaluationRule::Move {
+            if node.reeval_rule() == directed::ReevaluationRule::Move && node.input_reftype(&input) != Some(directed::RefType::Owned) {
+                inject_transparent_out_to_opaque_ref_in(node, parent, output, input)
+            } else {
+                inject_opaque_out(node, parent, output, input)
+            }
+        } else {
+            inject_transparent_out_to_owned_in(node, parent, output, input)
+        }
+    }
 }
 
 /// Functions that return a NodeOutput are used as-is, where as functions
 /// that return anything else are wrapped in a simple MultOutput (simple
 /// in that it contains only 1 output named '_')
-fn generate_output_handling(config: &StageConfig) -> proc_macro2::TokenStream {
-    let arg_names = config.inputs.iter().map(|input| &input.name);
-    if config.is_multi_output() {
-        quote! {
-            Ok(Self::get_fn()(state, #(#arg_names),*))
+fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy, Span)) -> proc_macro2::TokenStream {
+    // TODO: Right now cache_last and cache_all are handled more differently than necessary
+    let arg_names = config.inputs.iter().map(|input| &input.name).collect::<Vec<_>>();
+    let clean_names = config.inputs.iter().map(|input| &input.clean_name).collect::<Vec<_>>();
+    let arg_types = config.inputs.iter().map(|input| &input.type_).collect::<Vec<_>>();
+    let downcast_ref_calls = clean_names.iter().zip(arg_types.iter()).zip(arg_names.iter()).map(|((clean_name, arg_type), arg_name)| {
+        let name_span = arg_name.span();
+        quote_spanned!{name_span=>
+            if let Some(cached_in) = cached.inputs.get(#clean_name) {
+                if let Some(dc) = in_val.0.downcast_ref::<#arg_type>() {
+                    if dc.downcast_eq(&**cached_in) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }).collect::<Vec<_>>();
+    let fn_call = if config.is_multi_output() {
+        quote_spanned! {Span::call_site()=>
+            Self::get_fn()(state, #(#arg_names),*)
         }
     } else {
-        quote! {
-            Ok(directed::NodeOutput::new_simple(Self::get_fn()(state, #(#arg_names),*)))
+        quote_spanned! {Span::call_site()=>
+            directed::NodeOutput::new_simple(Self::get_fn()(state, #(#arg_names),*))
         }
+    };
+
+    if cache_strategy.0 == CacheStrategy::All {
+        quote_spanned!{cache_strategy.1=>
+            // Use a hasher
+            let hash: u64 = {
+                #[allow(unused_imports)]
+                use std::hash::Hash;
+                #[allow(unused_imports)]
+                use std::hash::Hasher;
+                #[allow(unused_mut)]
+                let mut hasher = std::hash::DefaultHasher::new();
+                #(#arg_names.hash(&mut hasher);)*
+                hasher.finish()
+            };
+
+            // Check equality
+            #[allow(unused_variables)]
+            let cached = cache.get(&hash).and_then(|cached| {
+                cached.iter().find(|cached| {
+                    inputs.iter().all(|(in_name, in_val)| {
+                        #(#downcast_ref_calls)*
+                        false
+                    })
+                })
+            });
+
+            if let Some(cached) = cached {
+                // Just use cached values
+                if cached.outputs.len() == 1 && cached.outputs.get(&"_".into()).is_some() {
+                    // TODO: Don't panic
+                    Ok(NodeOutput::new_simple(cached.outputs.get(&"_".into()).unwrap().clone()))
+                } else {
+                    let mut result = NodeOutput::new();
+                    for (out_name, out_val) in cached.outputs.iter() {
+                        result = result.add(&out_name.name, out_val.clone());
+                    }
+                    Ok(result)
+                }
+            } else {
+                // Call and store result in cache
+                let result = #fn_call;
+                let cache_entry = {
+                    #[allow(unused_mut)]
+                    let mut cached = directed::Cached {
+                        inputs: std::collections::HashMap::new(),
+                        outputs: std::collections::HashMap::new(),
+                    };
+                    for (in_name, in_val) in inputs.iter() {
+                        cached.inputs.insert(in_name.clone(), in_val.0.clone());
+                    }
+                    match &result {
+                        NodeOutput::Standard(val) => {
+                            cached.outputs.insert("_".into(), val.clone());
+                        },
+                        NodeOutput::Named(vals) => {
+                            for (key, val) in vals {
+                                cached.outputs.insert(key.clone(), val.clone());
+                            }
+                        },
+                    }
+                    cached
+                };
+                if let None = cache.get(&hash) {
+                    cache.insert(hash, Vec::new());
+                }
+                if let Some(vec) = cache.get_mut(&hash) {
+                    vec.push(cache_entry);
+                }
+                Ok(result)
+            }
+        }
+    } else {
+        // No advanced caching, just run it
+        quote_spanned!(cache_strategy.1=>Ok(#fn_call))
     }
 }
 
@@ -520,7 +612,7 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
         let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_name);
         match ref_type {
             RefType::Owned => {
-                output.push(quote!{
+                output.push(quote_spanned!{arg_name.span()=>
                     let #arg_name = match #reeval_name {
                         directed::ReevaluationRule::Move => {
                             // Parent is opaque, use Arc::into_inner
@@ -529,16 +621,15 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
                                 None => {return Err(directed::InjectionError::TooManyReferences(stringify!(#arg_name)))}
                             }
                         },
-                        directed::ReevaluationRule::CacheLast => {
+                        directed::ReevaluationRule::CacheLast | directed::ReevaluationRule::CacheAll => {
                             // Parent is transparent, clone the value
                             (*#arg_name).clone()
                         },
-                        directed::ReevaluationRule::CacheAll => panic!("CacheAll is not yet implemented"),
                     };
                 });
             }
             RefType::Borrowed => {
-                output.push(quote! {
+                output.push(quote_spanned!{arg_name.span()=>
                     // TODO: if node is transparent (config.cache_strategy != None), error with a graceful message (rather than letting clone fail)
                     let #arg_name = #arg_name.as_ref();
                 });
@@ -563,34 +654,26 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     // Generate code sections
     let input_registrations = generate_input_registrations(&config.inputs);
     let output_registrations = generate_output_registrations(&config.outputs);
-    let extraction_code = match config.cache_strategy {
-        CacheStrategy::None => generate_extraction_code_move(&config.inputs),
-        CacheStrategy::Last => generate_extraction_code_cache_last(&config.inputs),
-        CacheStrategy::All => todo!(), // TODO: Handle CacheAll extraction
-    };
-    let inject_opaque_out_code = inject_opaque_out(&config.inputs);
-    let inject_transparent_out_to_owned_in_code =
-        inject_transparent_out_to_owned_in(&config.inputs);
-    let inject_transparent_out_to_opaque_ref_in_code =
-        inject_transparent_out_to_opaque_ref_in(&config.inputs);
+    let extraction_code = generate_extraction_code(&config.inputs, config.cache_strategy);
+    let injection_code = input_injection(&config.inputs);
     let prepare_input_types_code = prepare_input_types(&config);
-    let output_handling = generate_output_handling(&config);
+    let output_handling = generate_output_handling(&config, config.cache_strategy);
 
     // Determine evaluation strategy and reevaluation rule
-    let eval_strategy = if config.is_lazy {
-        quote! { directed::EvalStrategy::Lazy }
+    let eval_strategy = if config.is_lazy.0 {
+        quote_spanned! {config.is_lazy.1=> directed::EvalStrategy::Lazy }
     } else {
-        quote! { directed::EvalStrategy::Urgent }
+        quote_spanned! {config.is_lazy.1=> directed::EvalStrategy::Urgent }
     };
 
-    let reevaluation_rule = match config.cache_strategy {
-        CacheStrategy::None => quote! { directed::ReevaluationRule::Move },
-        CacheStrategy::Last => quote! { directed::ReevaluationRule::CacheLast },
-        CacheStrategy::All => todo!(), //quote! { directed::ReevaluationRule::CacheAll },
+    let reevaluation_rule = match &config.cache_strategy {
+        (CacheStrategy::None, span) => quote_spanned! {*span=> directed::ReevaluationRule::Move },
+        (CacheStrategy::Last, span) => quote_spanned! {*span=> directed::ReevaluationRule::CacheLast },
+        (CacheStrategy::All, span) => quote_spanned! {*span=> directed::ReevaluationRule::CacheAll },
     };
 
     // The coup de grace
-    quote! {
+    quote_spanned! {Span::call_site()=>
         // Create a struct implementing the Stage trait
         #[derive(Clone)]
         #fn_vis struct #stage_name {
@@ -620,7 +703,12 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 &self.outputs
             }
 
-            fn evaluate(&self, state: &mut Self::State, inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>) -> Result<directed::NodeOutput, directed::InjectionError> {
+            fn evaluate(
+                &self, 
+                state: &mut Self::State, 
+                inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>,
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached>>
+            ) -> Result<directed::NodeOutput, directed::InjectionError> {
                 #(#extraction_code)*
                 #(#prepare_input_types_code)*
                 #output_handling
@@ -635,31 +723,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
             }
 
             fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                    match input.inner() {
-                        #(#inject_opaque_out_code)*
-                    }
-                }
-                fn inject_transparent_out_to_owned_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                    match input.inner() {
-                        #(#inject_transparent_out_to_owned_in_code)*
-                    }
-                }
-                fn inject_transparent_out_to_opaque_ref_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                    match input.inner() {
-                        #(#inject_transparent_out_to_opaque_ref_in_code)*
-                    }
-                }
-
-                if parent.reeval_rule() == directed::ReevaluationRule::Move {
-                    if node.reeval_rule() == directed::ReevaluationRule::Move && node.input_reftype(&input) != Some(directed::RefType::Owned) {
-                        inject_transparent_out_to_opaque_ref_in(node, parent, output, input)
-                    } else {
-                        inject_opaque_out(node, parent, output, input)
-                    }
-                } else {
-                    inject_transparent_out_to_owned_in(node, parent, output, input)
-                }
+                #injection_code
             }
 
             fn name(&self) -> &str {

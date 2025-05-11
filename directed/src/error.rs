@@ -4,7 +4,7 @@ use crate::{AnyNode, DataLabel, Graph, Registry};
 
 /// Wrapper error type, wraps errors from this crate and stores a graph trace with them.
 #[derive(thiserror::Error, Debug)]
-pub struct Error<T: std::error::Error> {
+pub struct ErrorWithTrace<T: std::error::Error> {
     #[source]
     pub error: T,
     pub graph_trace: Option<GraphTrace>
@@ -97,7 +97,7 @@ impl From<daggy::EdgeIndex> for EdgeNotFoundInGraphError {
     }
 }
 
-impl<T: std::error::Error> Display for Error<T> {
+impl<T: std::error::Error> Display for ErrorWithTrace<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", self.error)?;
         if let Some(graph_trace) = &self.graph_trace {
@@ -107,7 +107,7 @@ impl<T: std::error::Error> Display for Error<T> {
     }
 }
 
-impl<T: std::error::Error> From<T> for Error<T> {
+impl<T: std::error::Error> From<T> for ErrorWithTrace<T> {
     fn from(error: T) -> Self {
         Self {
             error,
@@ -116,7 +116,7 @@ impl<T: std::error::Error> From<T> for Error<T> {
     }
 }
 
-impl<T: std::error::Error> Error<T> {
+impl<T: std::error::Error> ErrorWithTrace<T> {
     pub fn with_trace(self, trace: GraphTrace) -> Self {
         Self {
             error: self.error,

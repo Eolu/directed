@@ -23,8 +23,31 @@ pub struct Node<S: Stage> {
     pub(super) state: S::State,
     pub(super) inputs: HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
     pub(super) outputs: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
-    pub(super) cache: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
+    pub(super) cache: HashMap<u64, Vec<Cached>>,
     pub(super) input_changed: bool,
+}
+
+/// This represents a cached input/output pair
+/// TODO: handle state as well
+#[derive(Debug, Clone)]
+pub struct Cached {
+    pub inputs: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
+    pub outputs: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
+}
+
+/// Trait used to downcast and compare equality
+pub trait DowncastEq {
+    fn downcast_eq<T: Any + PartialEq>(&self, other: &Self) -> bool;
+}
+
+impl DowncastEq for dyn Any + Send + Sync {
+    fn downcast_eq<T: Any + PartialEq>(&self, other: &Self) -> bool {
+        if let (Some(t1), Some(t2)) = (self.downcast_ref::<T>(), other.downcast_ref::<T>()) {
+            t1 == t2
+        } else {
+            false
+        }
+    }
 }
 
 impl<S: Stage> Node<S> {
@@ -87,6 +110,7 @@ pub trait AnyNode: Any + Send + 'static {
     fn input_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>>;
     fn output_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>>;
     fn stage_name(&self) -> &str;
+    fn cache_mut(&mut self) -> &mut HashMap<u64, Vec<Cached>>;
 }
 
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
@@ -132,8 +156,7 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
 
     fn eval(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError> {
         let mut old_outputs = HashMap::new();
-        // TODO: This stage clone is silly spaghetti
-        let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs)?;
+        let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
 
         match outputs {
             NodeOutput::Standard(val) => {
@@ -155,8 +178,7 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
     #[cfg(feature = "tokio")]
     async fn eval_async(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError> {
         let mut old_outputs = HashMap::new();
-        // TODO: This stage clone is silly spaghetti
-        let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs)?;
+        let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
 
         match outputs {
             NodeOutput::Standard(val) => {
@@ -216,5 +238,9 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
     
     fn stage_name(&self) -> &str {
         self.stage.name()
+    }
+
+    fn cache_mut(&mut self) -> &mut HashMap<u64, Vec<Cached>> {
+        &mut self.cache
     }
 }

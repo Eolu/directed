@@ -8,7 +8,7 @@ mod error;
 
 pub use directed_stage_macro::stage;
 pub use graphs::{EdgeInfo, Graph};
-pub use node::{AnyNode, Node};
+pub use node::{AnyNode, Node, Cached, DowncastEq};
 pub use registry::Registry;
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, NodeOutput};
@@ -616,5 +616,49 @@ mod async_tests {
         // but give some wiggle room for test environment variability
         assert!(elapsed < Duration::from_millis(1900), 
                 "Execution took {:?}, should be less than 190ms if parallel", elapsed);
+    }
+
+    #[test]
+    fn basic_cache_all_test() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+        #[stage(lazy, cache_all)]
+        fn CacheStage1() -> String {
+            println!("Running stage 1");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            String::from("This is the output!")
+        }
+
+        #[stage(lazy, cache_last)]
+        fn TinyStage2(input: String, input2: String) -> String {
+            println!("Running stage 2");
+            input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
+        }
+
+        #[stage(cache_last)]
+        fn TinyStage3(input: String) {
+            println!("Running stage 3");
+            assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
+        }
+
+        let mut registry = Registry::new();
+        let node_1 = registry.register(CacheStage1::new());
+        let node_2 = registry.register(TinyStage2::new());
+        let node_3 = registry.register(TinyStage3::new());
+        let graph = graph! {
+            nodes: [node_1, node_2, node_3],
+            connections: {
+                node_1: _ => node_2: input,
+                node_1: _ => node_2: input2,
+                node_2: _ => node_3: input,
+            }
+        }
+        .unwrap();
+
+        // Prove that cache stage 1 doesn't rerun
+        graph.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
+        graph.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
     }
 }
