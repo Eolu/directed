@@ -6,7 +6,9 @@ use std::{
 };
 
 use crate::{
-    stage::{EvalStrategy, ReevaluationRule, Stage}, types::{DataLabel, NodeOutput}, InjectionError, RefType
+    InjectionError, RefType,
+    stage::{EvalStrategy, ReevaluationRule, Stage},
+    types::{DataLabel, NodeOutput},
 };
 
 /// Used for single-output functions
@@ -87,7 +89,9 @@ pub trait AnyNode: Any + Send + 'static {
     /// Evaluates the node. Returns a map of prior outputs
     fn eval(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError>;
     #[cfg(feature = "tokio")]
-    async fn eval_async(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError>;
+    async fn eval_async(
+        &mut self,
+    ) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError>;
     fn eval_strategy(&self) -> EvalStrategy;
     fn reeval_rule(&self) -> ReevaluationRule;
     /// Set the outputs and return any existing outputs.
@@ -117,15 +121,21 @@ pub trait AnyNode: Any + Send + 'static {
     fn set_input_changed(&mut self, val: bool);
     /// See `[Self::set_input_changed]`
     fn input_changed(&self) -> bool;
-    fn input_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>>;
-    fn output_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>>;
+    fn input_names(
+        &self,
+    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>>;
+    fn output_names(
+        &self,
+    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>>;
     fn stage_name(&self) -> &str;
     fn cache_mut(&mut self) -> &mut HashMap<u64, Vec<Cached>>;
 }
 
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
-impl<S: Stage + Send + 'static> AnyNode for Node<S> 
-    where S::State: Send {
+impl<S: Stage + Send + 'static> AnyNode for Node<S>
+where
+    S::State: Send,
+{
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         Box::new(*self)
     }
@@ -161,7 +171,11 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
                 println!("Node: {:?}", self.stage_name());
                 println!("Output key: {key:?}");
                 println!("Output type: {output_type:?}, Got: {id:?}");
-                println!("String type: {:?}, Arc<String>: {:?}", TypeId::of::<String>(), TypeId::of::<Arc<String>>());
+                println!(
+                    "String type: {:?}, Arc<String>: {:?}",
+                    TypeId::of::<String>(),
+                    TypeId::of::<Arc<String>>()
+                );
                 return Err(InjectionError::OutputTypeMismatch(key.clone()));
             }
             _ => Ok(self.outputs.insert(key.clone(), output)),
@@ -170,7 +184,9 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
 
     fn eval(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError> {
         let mut old_outputs = HashMap::new();
-        let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
+        let outputs = self
+            .stage
+            .evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
 
         match outputs {
             NodeOutput::Standard(val) => {
@@ -190,9 +206,13 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
     }
 
     #[cfg(feature = "tokio")]
-    async fn eval_async(&mut self) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError> {
+    async fn eval_async(
+        &mut self,
+    ) -> Result<HashMap<DataLabel, Arc<dyn Any + Send + Sync>>, InjectionError> {
         let mut old_outputs = HashMap::new();
-        let outputs = self.stage.evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
+        let outputs = self
+            .stage
+            .evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
 
         match outputs {
             NodeOutput::Standard(val) => {
@@ -241,15 +261,19 @@ impl<S: Stage + Send + 'static> AnyNode for Node<S>
     fn input_reftype(&self, name: &DataLabel) -> Option<RefType> {
         self.stage.inputs().get(name).map(|input| input.1)
     }
-    
-    fn input_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>> {
+
+    fn input_names(
+        &self,
+    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>> {
         self.stage.inputs().keys().cloned()
     }
-    
-    fn output_names(&self) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>> {
+
+    fn output_names(
+        &self,
+    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>> {
         self.stage.outputs().keys().cloned()
     }
-    
+
     fn stage_name(&self) -> &str {
         self.stage.name()
     }

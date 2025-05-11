@@ -5,8 +5,9 @@ use std::{
 };
 
 use crate::{
+    InjectionError,
     node::{AnyNode, Node},
-    types::{DataLabel, NodeOutput}, InjectionError,
+    types::{DataLabel, NodeOutput},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]

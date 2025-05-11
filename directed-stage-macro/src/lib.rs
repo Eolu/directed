@@ -1,9 +1,13 @@
 use proc_macro::TokenStream;
-use proc_macro2::Span;
 use proc_macro_error::proc_macro_error;
+use proc_macro2::Span;
 use quote::quote_spanned;
 use syn::{
-    parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, spanned::Spanned, FnArg, ItemFn, Pat, ReturnType, Token, Type
+    FnArg, ItemFn, Pat, ReturnType, Token, Type,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+    spanned::Spanned,
 };
 
 // TODO: `inject_input` implementation is unruly and violates DRY in silly ways. It could be simplified a lot.
@@ -15,7 +19,7 @@ use syn::{
 ///
 /// ```ignore
 /// use crate::*;
-/// 
+///
 /// #[stage(lazy, transparent)]
 /// fn add_numbers(a: i32, b: i32) -> i32 {
 ///     a + b
@@ -51,7 +55,7 @@ struct StageConfig {
     cache_strategy: (CacheStrategy, Span),
     outputs: Vec<(String, Type, Span)>,
     inputs: Vec<InputParam>,
-    state_type: proc_macro2::TokenStream
+    state_type: proc_macro2::TokenStream,
 }
 
 #[derive(Clone)]
@@ -66,7 +70,9 @@ impl RefType {
         match self {
             RefType::Owned => quote_spanned! {Span::call_site()=> directed::RefType::Owned },
             RefType::Borrowed => quote_spanned! {Span::call_site()=> directed::RefType::Borrowed },
-            RefType::BorrowedMut => quote_spanned! {Span::call_site()=> directed::RefType::BorrowedMut },
+            RefType::BorrowedMut => {
+                quote_spanned! {Span::call_site()=> directed::RefType::BorrowedMut }
+            }
         }
     }
 }
@@ -77,7 +83,7 @@ struct InputParam {
     type_: Type,
     ref_type: RefType,
     clean_name: String,
-    span: Span
+    span: Span,
 }
 
 #[derive(Clone)]
@@ -101,14 +107,18 @@ impl Parse for Output {
         let name: syn::Ident = input.parse()?;
         let _colon_token: Token![:] = input.parse()?;
         let ty: syn::Type = input.parse()?;
-        Ok(Output { name, ty, span: Span::call_site() })
+        Ok(Output {
+            name,
+            ty,
+            span: Span::call_site(),
+        })
     }
 }
 
 enum StageArg {
     Flag(syn::Ident),
     Output(Outputs),
-    State(syn::Type)
+    State(syn::Type),
 }
 
 impl Parse for StageArg {
@@ -181,7 +191,7 @@ impl StageConfig {
                     for output in &output_defs.0 {
                         outputs.push((output.name.to_string(), output.ty.clone(), output.span));
                     }
-                },
+                }
                 StageArg::State(ty) => {
                     state_type = quote_spanned!(ty.span()=>#ty);
                 }
@@ -203,7 +213,7 @@ impl StageConfig {
             cache_strategy,
             outputs,
             inputs,
-            state_type
+            state_type,
         })
     }
 
@@ -239,7 +249,7 @@ impl StageConfig {
                         type_: *arg_type.clone(),
                         ref_type,
                         clean_name,
-                        span: arg.span()
+                        span: arg.span(),
                     });
                 }
             }
@@ -303,7 +313,6 @@ fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::Token
         let arg_type = &input.type_;
         let ref_type = input.ref_type.quoted();
         let span = input.span.clone();
-        
         quote_spanned! {span=>
             inputs.insert(directed::DataLabel::new_with_type_name(#arg_name, stringify!(#arg_type)), (std::any::TypeId::of::<#arg_type>(), #ref_type));
         }
@@ -316,7 +325,9 @@ fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::Token
 /// simply associate that one type with the name '_'.
 ///
 /// Used to build and validate I/O-based connections
-fn generate_output_registrations(outputs: &[(String, Type, Span)]) -> Vec<proc_macro2::TokenStream> {
+fn generate_output_registrations(
+    outputs: &[(String, Type, Span)],
+) -> Vec<proc_macro2::TokenStream> {
     outputs
         .iter()
         .map(|(name, ty, _span)| {
@@ -340,7 +351,10 @@ fn true_type(ty: &syn::Type) -> &syn::Type {
 /// This code is used by the wrapper function - it downcasts type-erased
 /// function parameters so that the user-facing function can be called with
 /// concrete types.
-fn generate_extraction_code(inputs: &[InputParam], cache_strategy: (CacheStrategy, Span)) -> Vec<proc_macro2::TokenStream> {
+fn generate_extraction_code(
+    inputs: &[InputParam],
+    cache_strategy: (CacheStrategy, Span),
+) -> Vec<proc_macro2::TokenStream> {
     inputs.iter().map(|input| {
         let arg_name = &input.name;
         let arg_type = true_type(&input.type_);
@@ -387,7 +401,6 @@ fn generate_extraction_code(inputs: &[InputParam], cache_strategy: (CacheStrateg
                 };
             },
         }
-        
     }).collect()
 }
 
@@ -405,7 +418,7 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
         let span = input.span.clone();
 
         inject_opaque_out_code.push(quote_spanned! {span=>
-            #clean_arg_name => {
+            Some(#clean_arg_name) => {
                 #[allow(unused_variables)]
                 let input_changed = node.input_changed();
                 let output_val = parent.outputs_mut()
@@ -418,7 +431,7 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
             }
         });
         inject_transparent_out_to_owned_in_code.push(quote_spanned! {span=>
-            #clean_arg_name => {
+            Some(#clean_arg_name) => {
                 #[allow(unused_variables)]
                 let input_changed = node.input_changed();
                 let output_val = parent.outputs_mut()
@@ -446,7 +459,7 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
             }
         });
         inject_transparent_out_to_opaque_ref_in_code.push(quote_spanned! {span=>
-            #clean_arg_name => {
+            Some(#clean_arg_name) => {
                 #[allow(unused_variables)]
                 let input_changed = node.input_changed();
                 let output_val_arc = parent.outputs_mut()
@@ -454,7 +467,6 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
                     .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
                 let output_val_ref = std::sync::Arc::downcast::<#arg_type>(output_val_arc.clone())
                     .map_err(|_| directed::InjectionError::InputTypeMismatch(input.clone()))?;
-                
                 match node.inputs_mut().get(&input) {
                     Some((input_val, _)) => {
                         let input_val = input_val
@@ -477,8 +489,9 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
 
     // Add the default case
     let default_case = quote_spanned! {Span::call_site()=>
-        name => Err(directed::InjectionError::InputNotFound(name.into()))
-    }; 
+        Some(name) => Err(directed::InjectionError::InputNotFound(name.into())),
+        None => Ok(()) // This means there's a connection with no data associated
+    };
     inject_opaque_out_code.push(default_case.clone());
     inject_transparent_out_to_owned_in_code.push(default_case.clone());
     inject_transparent_out_to_opaque_ref_in_code.push(default_case);
@@ -515,11 +528,26 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
 /// Functions that return a NodeOutput are used as-is, where as functions
 /// that return anything else are wrapped in a simple MultOutput (simple
 /// in that it contains only 1 output named '_')
-fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy, Span)) -> proc_macro2::TokenStream {
+fn generate_output_handling(
+    config: &StageConfig,
+    cache_strategy: (CacheStrategy, Span),
+) -> proc_macro2::TokenStream {
     // TODO: Right now cache_last and cache_all are handled more differently than necessary
-    let arg_names = config.inputs.iter().map(|input| &input.name).collect::<Vec<_>>();
-    let clean_names = config.inputs.iter().map(|input| &input.clean_name).collect::<Vec<_>>();
-    let arg_types = config.inputs.iter().map(|input| &input.type_).collect::<Vec<_>>();
+    let arg_names = config
+        .inputs
+        .iter()
+        .map(|input| &input.name)
+        .collect::<Vec<_>>();
+    let clean_names = config
+        .inputs
+        .iter()
+        .map(|input| &input.clean_name)
+        .collect::<Vec<_>>();
+    let arg_types = config
+        .inputs
+        .iter()
+        .map(|input| &input.type_)
+        .collect::<Vec<_>>();
     let downcast_ref_calls = clean_names.iter().zip(arg_types.iter()).zip(arg_names.iter()).map(|((clean_name, arg_type), arg_name)| {
         let name_span = arg_name.span();
         quote_spanned!{name_span=>
@@ -533,10 +561,16 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
         }
     }).collect::<Vec<_>>();
     // TODO: Get all output types annotated
-    let first_output_type = config.outputs.iter().map(|(_, t, _)| t).cloned().next().unwrap_or(Type::Tuple(syn::TypeTuple {
-        paren_token: syn::token::Paren::default(),
-        elems: Punctuated::new(),
-    }));
+    let first_output_type = config
+        .outputs
+        .iter()
+        .map(|(_, t, _)| t)
+        .cloned()
+        .next()
+        .unwrap_or(Type::Tuple(syn::TypeTuple {
+            paren_token: syn::token::Paren::default(),
+            elems: Punctuated::new(),
+        }));
     let fn_call = if config.is_multi_output() {
         quote_spanned! {Span::call_site()=>
             Self::get_fn()(state, #(#arg_names),*)
@@ -548,7 +582,7 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
     };
 
     if cache_strategy.0 == CacheStrategy::All {
-        quote_spanned!{cache_strategy.1=>
+        quote_spanned! {cache_strategy.1=>
             // Use a hasher
             let hash: u64 = {
                 #[allow(unused_imports)]
@@ -582,7 +616,7 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
                 } else {
                     let mut result = NodeOutput::new();
                     for (out_name, out_val) in cached.outputs.iter() {
-                        result = result.add(&out_name.name, out_val.clone());
+                        result = result.add(&out_name.name.to_owned().expect("Expected a non-blank data label"), out_val.clone());
                     }
                     Ok(result)
                 }
@@ -652,7 +686,7 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
                 });
             }
             RefType::Borrowed => {
-                output.push(quote_spanned!{arg_name.span()=>
+                output.push(quote_spanned! {arg_name.span()=>
                     // TODO: if node is transparent (config.cache_strategy != None), error with a graceful message (rather than letting clone fail)
                     let #arg_name = #arg_name.as_ref();
                 });
@@ -691,8 +725,12 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
 
     let reevaluation_rule = match &config.cache_strategy {
         (CacheStrategy::None, span) => quote_spanned! {*span=> directed::ReevaluationRule::Move },
-        (CacheStrategy::Last, span) => quote_spanned! {*span=> directed::ReevaluationRule::CacheLast },
-        (CacheStrategy::All, span) => quote_spanned! {*span=> directed::ReevaluationRule::CacheAll },
+        (CacheStrategy::Last, span) => {
+            quote_spanned! {*span=> directed::ReevaluationRule::CacheLast }
+        }
+        (CacheStrategy::All, span) => {
+            quote_spanned! {*span=> directed::ReevaluationRule::CacheAll }
+        }
     };
 
     // The coup de grace
@@ -727,8 +765,8 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
             }
 
             fn evaluate(
-                &self, 
-                state: &mut Self::State, 
+                &self,
+                state: &mut Self::State,
                 inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>,
                 cache: &mut std::collections::HashMap<u64, Vec<directed::Cached>>
             ) -> Result<directed::NodeOutput, directed::InjectionError> {

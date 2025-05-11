@@ -1,18 +1,18 @@
 #![doc = include_str!("../README.md")]
+mod error;
 mod graphs;
 mod node;
 mod registry;
 mod stage;
 mod types;
-mod error;
 
 pub use directed_stage_macro::stage;
+pub use error::*;
 pub use graphs::{EdgeInfo, Graph};
-pub use node::{AnyNode, Node, Cached, DowncastEq};
+pub use node::{AnyNode, Cached, DowncastEq, Node};
 pub use registry::Registry;
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, NodeOutput};
-pub use error::*;
 
 #[cfg(test)]
 mod tests {
@@ -49,9 +49,9 @@ mod tests {
         let graph = graph! {
             nodes: [node_1, node_2, node_3],
             connections: {
-                node_1: _ => node_2: input,
-                node_1: _ => node_2: input2,
-                node_2: _ => node_3: input,
+                node_1 => node_2: input,
+                node_1 => node_2: input2,
+                node_2 => node_3: input,
             }
         }
         .unwrap();
@@ -123,7 +123,7 @@ mod tests {
         let graph = graph! {
             nodes: [lazy_node, urgent_node],
             connections: {
-                lazy_node: _ => urgent_node: input,
+                lazy_node => urgent_node: input,
             }
         }
         .unwrap();
@@ -177,10 +177,10 @@ mod tests {
         let graph = graph! {
             nodes: [source, transparent, opaque, sink],
             connections: {
-                source: _ => transparent: input,
-                source: _ => opaque: input,
-                transparent: _ => sink: t_input,
-                opaque: _ => sink: o_input,
+                source => transparent: input,
+                source => opaque: input,
+                transparent => sink: t_input,
+                opaque => sink: o_input,
             }
         }
         .unwrap();
@@ -221,8 +221,8 @@ mod tests {
         let result = graph! {
             nodes: [node_a, node_b],
             connections: {
-                node_a: _ => node_b: input,
-                node_b: _ => node_a: input,
+                node_a => node_b: input,
+                node_b => node_a: input,
             }
         };
 
@@ -306,7 +306,7 @@ mod tests {
         let graph = graph! {
             nodes: [producer, consumer],
             connections: {
-                producer: _ => consumer: input,
+                producer => consumer: input,
             }
         }
         .unwrap();
@@ -338,7 +338,7 @@ mod tests {
         let graph = graph! {
             nodes: [producer, consumer],
             connections: {
-                producer: _ => consumer: input1,
+                producer => consumer: input1,
             }
         }
         .unwrap();
@@ -359,10 +359,10 @@ mod tests {
         assert_ne!(label1, label3);
 
         let const_label = DataLabel::new_const("const");
-        assert_eq!(const_label.inner(), "const");
+        assert_eq!(const_label.inner(), Some("const"));
 
         let from_str: DataLabel = "string".into();
-        assert_eq!(from_str.inner(), "string");
+        assert_eq!(from_str.inner(), Some("string"));
     }
 
     // Test graph with diamond pattern
@@ -398,10 +398,10 @@ mod tests {
         let graph = graph! {
             nodes: [source, path_a, path_b, sink],
             connections: {
-                source: _ => path_a: input,
-                source: _ => path_b: input,
-                path_a: _ => sink: a,
-                path_b: _ => sink: b,
+                source => path_a: input,
+                source => path_b: input,
+                path_a => sink: a,
+                path_b => sink: b,
             }
         }
         .unwrap();
@@ -589,9 +589,9 @@ mod tests {
         let graph1 = graph! {
             nodes: [node_1, node_2, node_3],
             connections: {
-                node_1: _ => node_2: input,
-                node_1: _ => node_2: input2,
-                node_2: _ => node_3: input,
+                node_1 => node_2: input,
+                node_1 => node_2: input2,
+                node_2 => node_3: input,
             }
         }
         .unwrap();
@@ -605,9 +605,9 @@ mod tests {
         let graph2 = graph! {
             nodes: [node_1_alt, node_2, node_3_alt],
             connections: {
-                node_1_alt: _ => node_2: input,
-                node_1_alt: _ => node_2: input2,
-                node_2: _ => node_3_alt: input,
+                node_1_alt => node_2: input,
+                node_1_alt => node_2: input2,
+                node_2 => node_3_alt: input,
             }
         }
         .unwrap();
@@ -617,6 +617,48 @@ mod tests {
         graph2.execute(&mut registry).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         graph1.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+    }
+
+    /// Test connections without data
+    #[test]
+    fn blank_connections_test() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        #[stage(lazy)]
+        fn TinyStage1() {
+            println!("Running stage 1");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+        }
+
+        #[stage(lazy)]
+        fn TinyStage2() {
+            println!("Running stage 2");
+            assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+        }
+
+        #[stage]
+        fn TinyStage3() {
+            println!("Running stage 3");
+            assert_eq!(COUNTER.load(Ordering::SeqCst), 3);
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let mut registry = Registry::new();
+        let node_1 = registry.register(TinyStage1::new());
+        let node_2 = registry.register(TinyStage2::new());
+        let node_3 = registry.register(TinyStage3::new());
+        let graph = graph! {
+            nodes: [node_1, node_2, node_3],
+            connections: {
+                node_1 => node_2,
+                node_2 => node_3,
+                node_1 => node_3,
+            }
+        }
+        .unwrap();
+
+        graph.execute(&mut registry).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
     }
 
@@ -670,8 +712,8 @@ mod async_tests {
         let graph = graph! {
             nodes: [stage1, stage2, combine],
             connections: {
-                stage1: _ => combine: as_num,
-                stage2: _ => combine: as_text,
+                stage1 => combine: as_num,
+                stage2 => combine: as_text,
             }
         }
         .unwrap();
@@ -682,17 +724,23 @@ mod async_tests {
 
         // Time the execution
         let start = std::time::Instant::now();
-        graph.execute_async(tokio::sync::Mutex::new(registry)).await.unwrap();
+        graph
+            .execute_async(tokio::sync::Mutex::new(registry))
+            .await
+            .unwrap();
         let elapsed = start.elapsed();
 
         // Both slow stages should have been executed
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
 
         println!("Execution completed in {:?}", elapsed);
-        
+
         // The execution should take less than 2000ms (if the stages ran in parallel)
         // but give some wiggle room for test environment variability
-        assert!(elapsed < Duration::from_millis(1900), 
-                "Execution took {:?}, should be less than 190ms if parallel", elapsed);
+        assert!(
+            elapsed < Duration::from_millis(1900),
+            "Execution took {:?}, should be less than 1900ms if parallel",
+            elapsed
+        );
     }
 }

@@ -67,34 +67,6 @@ fn MultiOutputStage() -> NodeOutput {
 }
 ```
 
-#### State
-
-Stages can be annotated with `state`. This will indicate a type that can be used to store internal state for the node. This could also be used to store some kind of configuration for the node that might be modified outside the graph's evaluation time. State is never accessed by other nodes or transferred throughout the graph in any way:
-```rust
-use directed::*;
-
-// Example state struct (any type can be used)
-#[derive(Default)]
-struct SomeState {
-    num_times_run: u32
-}
-
-// Use `state(TypeOfState)` to indicate the usage of state
-#[stage(state(SomeState))]
-fn StatefulStage() -> String {
-    // this will automatically put an '&mut SomeState' in scope called 'state'
-    let result = if state.num_times_run == 0 {
-        format!("I've never been run!")
-    } else {
-        format!("I've been run {} times.", state.num_times_run)
-    };
-    state.num_times_run += 1;
-    result
-}
-```
-
-It is possible to access or mutate state outside of graph evaluation. See the `Registry` section for more details.
-
 #### Lazy
 Stages can be annotated as `lazy`. This will indicate that it's node will never be evaluated until a child node needs its output to evaluate. Typical graphs will have multiple lazy nodes, and one or possibly a few non-lazy nodes. A graph with only lazy nodes will do nothing at all:
 ```rust
@@ -130,7 +102,33 @@ Preconditions:
 - All previous conditions for `cache_last`
 - All inputs must be `Hash`
 
-TODO: This needs more comprehensive testing. Right now only the most basic scenaria has been tested at all.
+#### State
+
+Stages can be annotated with `state`. This will indicate a type that can be used to store internal state for the node. This could also be used to store some kind of configuration for the node that might be modified outside the graph's evaluation time. State is never accessed by other nodes or transferred throughout the graph in any way:
+```rust
+use directed::*;
+
+// Example state struct (any type can be used)
+#[derive(Default)]
+struct SomeState {
+    num_times_run: u32
+}
+
+// Use `state(TypeOfState)` to indicate the usage of state
+#[stage(state(SomeState))]
+fn StatefulStage() -> String {
+    // this will automatically put an '&mut SomeState' in scope called 'state'
+    let result = if state.num_times_run == 0 {
+        format!("I've never been run!")
+    } else {
+        format!("I've been run {} times.", state.num_times_run)
+    };
+    state.num_times_run += 1;
+    result
+}
+```
+
+It is possible to access or mutate state outside of graph evaluation. See the `Registry` section for more details.
 
 ### Registry
 
@@ -208,10 +206,15 @@ fn main() {
         // Nodes that will be a part of the graph must be defined.
         nodes: [node_1, node_2, node_3],
         connections: {
-            // Unnamed outputs are indicated as _. If any of these stages had named outputs, we would put that in its place.
-            node_1: _ => node_2: input,
-            node_1: _ => node_2: input2,
-            node_2: _ => node_3: input,
+            // The below uses unnamed outputs only. Named outputs can be
+            // indicated the same way as named inputs, `node_name: output_name`
+            node_1 => node_2: input,
+            node_1 => node_2: input2,
+            node_2 => node_3: input,
+            // It is also possible to make connections between nodes without
+            // any data being passed between them by leaving out the names 
+            // of both the input and output parameters:
+            // `node_name => dependant_node_name`
         }
     }
     .unwrap();
@@ -248,15 +251,15 @@ That's it. Currently, stages can't be marked async, but they can be executed ind
 
 ## WIP features/ideas/TODOs
 
-- Outside of async some Send+Aync bounds can be relaxed, some Arc usage can be replaced with Rc
-- Improve error system to be cleaner
-- A Graph + Registry could be combined to create a Node (with a baked stage). Right now we combine nodes with stages to make the registry, and registries with graphs. If we could istead combine STAGES with graphs, then output a valid registry full of nodes based on that combination, it would avoid the possibility of combining a registry with an invalid graph entirely.
-    - Extended idea: Full graph sharding with support for distributed execution
-- An attribute that makes it serialize the cache and store between runs
-- Accept inputs for top-level nodes, return outputs from leaf nodes
-- Automatic validators to make sure correct input and output types are present if required
-- A way to reset all registry state at once
-- Handle when a node is unavailable from the registry in async execution (wait until it's available again)
+- High priority: Accept inputs for top-level nodes, return outputs from leaf nodes (important because it finally makes this crate a drop-in replacement for... anywhere you want a graph that you didn't use to have a graph)
+- High priority: Handle when a node is unavailable from the registry in async execution (wait until it's available again)
+    - There is in general more testing and work needed around this bullet. The registry serves as a node library that hands out nodes to be evaluated - and expects them to be returned when evaluation is done. Right now it will just give up if it attempts to concurrently execute the same node at the same time. Waiting is easy - but there are likely some situations where it CAN be valid to execute the same node at the same time. This will take a bit of plumbing in the proc macro.
+- Automatic validators to make sure correct input and output types are present if required (right now this would halt graph evaluation mid-way through and give an error, but there's no reason it can't do that before even starting evaluation)
+- Outside of async some Send+Sync bounds can be relaxed, some Arc usage can be replaced with Rc
+- Improve error system to be cleaner (it works but the different types of errors feel non-intuitive)
+- A Graph + Registry could be combined to create a Node (with a baked stage). Right now we combine nodes with stages to make the registry, and registries with graphs. If we could instead combine STAGES with graphs, then output a valid registry full of nodes based on that combination, it would avoid the possibility of combining a registry with an invalid graph entirely. (or even, full graph sharding?)
+- An attribute that makes it serialize the cache and store between runs (this may be out of scope, but if so at least make sure the design doesn't prohibit someone from doing this).
+- A way to reset all registry state at once (probably only slightly harder to implement than it was to right this bullet point)
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)
