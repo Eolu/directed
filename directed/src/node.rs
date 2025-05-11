@@ -37,13 +37,23 @@ pub struct Cached {
 
 /// Trait used to downcast and compare equality
 pub trait DowncastEq {
-    fn downcast_eq<T: Any + PartialEq>(&self, other: &Self) -> bool;
+    fn downcast_eq(&self, other: &dyn Any) -> bool;
 }
 
-impl DowncastEq for dyn Any + Send + Sync {
-    fn downcast_eq<T: Any + PartialEq>(&self, other: &Self) -> bool {
-        if let (Some(t1), Some(t2)) = (self.downcast_ref::<T>(), other.downcast_ref::<T>()) {
-            t1 == t2
+// impl DowncastEq for dyn Any + Send + Sync {
+//     fn downcast_eq<T: Any + PartialEq>(&self, other: &Self) -> bool {
+//         if let (Some(t1), Some(t2)) = (self.downcast_ref::<T>(), other.downcast_ref::<T>()) {
+//             t1 == t2
+//         } else {
+//             false
+//         }
+//     }
+// }
+
+impl<T: Any + PartialEq> DowncastEq for T {
+    fn downcast_eq(&self, other: &dyn Any) -> bool {
+        if let Some(other) = other.downcast_ref::<T>() {
+            self == other
         } else {
             false
         }

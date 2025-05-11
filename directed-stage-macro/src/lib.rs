@@ -507,7 +507,7 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
     let downcast_ref_calls = clean_names.iter().zip(arg_types.iter()).zip(arg_names.iter()).map(|((clean_name, arg_type), arg_name)| {
         let name_span = arg_name.span();
         quote_spanned!{name_span=>
-            if let Some(cached_in) = cached.inputs.get(#clean_name) {
+            if let Some(cached_in) = cached.inputs.get(&#clean_name.into()) {
                 if let Some(dc) = in_val.0.downcast_ref::<#arg_type>() {
                     if dc.downcast_eq(&**cached_in) {
                         return true;
@@ -543,6 +543,8 @@ fn generate_output_handling(config: &StageConfig, cache_strategy: (CacheStrategy
             // Check equality
             #[allow(unused_variables)]
             let cached = cache.get(&hash).and_then(|cached| {
+                #[allow(unused_imports)]
+                use directed::DowncastEq;
                 cached.iter().find(|cached| {
                     inputs.iter().all(|(in_name, in_val)| {
                         #(#downcast_ref_calls)*
