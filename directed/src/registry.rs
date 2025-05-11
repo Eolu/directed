@@ -20,7 +20,7 @@ impl Registry {
         match self.0.get(id) {
             Some(Some(any_node)) => match any_node.as_any().downcast_ref::<Node<S>>() {
                 Some(node) => Ok(&node.state),
-                None => unreachable!(),
+                None => Err(NodeTypeMismatchError{ got: any_node.type_id(), expected: TypeId::of::<Node<S>>() }.into()),
             },
             // TODO: Handle Some(None) as a special case, as this means the node is busy
             None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
@@ -31,9 +31,12 @@ impl Registry {
     pub fn state_mut<S: Stage + 'static>(&mut self, id: usize) -> Result<&mut S::State, RegistryError> {
         self.validate_node_type::<S>(id)?;
         match self.0.get_mut(id) {
-            Some(Some(any_node)) => match any_node.as_any_mut().downcast_mut::<Node<S>>() {
-                Some(node) => Ok(&mut node.state),
-                None => unreachable!(),
+            Some(Some(any_node)) => {
+                let node_type_id = any_node.type_id();
+                match any_node.as_any_mut().downcast_mut::<Node<S>>() {
+                    Some(node) => Ok(&mut node.state),
+                    None => Err(NodeTypeMismatchError{ got: node_type_id, expected: TypeId::of::<Node<S>>() }.into()),
+                }
             },
             // TODO: Handle Some(None) as a special case, as this means the node is busy
             None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
@@ -126,8 +129,11 @@ impl Registry {
         id0: usize,
         id1: usize,
     ) -> Result<(&mut Box<dyn AnyNode>, &mut Box<dyn AnyNode>), NodesNotFoundError> {
-        let first = std::cmp::min(id0, id1);
-        let second = std::cmp::max(id0, id1);
+        if id0 == id1 {
+            panic!("Attempted to borrow node id {id0} twice")
+        }
+        let first_id = std::cmp::min(id0, id1);
+        let second_id = std::cmp::max(id0, id1);
         match (self.0.len() < id0, self.0.len() < id1) {
             (true, true) => return Err(NodesNotFoundError::from(&[id0, id1] as &[usize])),
             (true, false) => return Err(NodesNotFoundError::from(&[id0] as &[usize])),
@@ -135,12 +141,12 @@ impl Registry {
             _ => (),
         }
 
-        if let [first, .., second] = &mut self.0[first..=second] {
+        if let [first, .., second] = &mut self.0[first_id..=second_id] {
             match (first, second) {
                 (None, None) => Err(NodesNotFoundError::from(&[id0, id1] as &[usize])),
                 (None, Some(_)) => Err(NodesNotFoundError::from(&[id0] as &[usize])),
                 (Some(_), None) => Err(NodesNotFoundError::from(&[id1] as &[usize])),
-                (Some(first), Some(second)) => Ok((first, second)),
+                (Some(first), Some(second)) => if first_id == id1 {Ok((first, second))} else {Ok((second, first))},
             }
         } else {
             unreachable!()

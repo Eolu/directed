@@ -17,6 +17,7 @@ macro_rules! output {
 /// to represent a function with multiple outputs. The [output] macro is the
 /// preferred way to construct this in that case. Any more direct interaction
 /// with this type is not recommended.
+#[derive(Debug)]
 pub enum NodeOutput {
     Standard(Arc<dyn Any + Send + Sync>),
     Named(HashMap<DataLabel, Arc<dyn Any + Send + Sync>>),

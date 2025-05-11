@@ -209,7 +209,7 @@ impl Graph {
     /// all dependant parent nodes in parallel.
     #[cfg(feature = "tokio")]
     #[async_recursion::async_recursion]
-    async fn execute_node_async(self: std::sync::Arc<Self> , idx: NodeIndex, top_trace: GraphTrace, registry: std::sync::Arc<tokio::sync::Mutex<Registry>>) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
+    async fn execute_node_async(self: std::sync::Arc<Self>, idx: NodeIndex, top_trace: GraphTrace, registry: std::sync::Arc<tokio::sync::Mutex<Registry>>) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         // Get the node ID
         let node_id = self.get_node_id_from_node_index(idx)
             .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
@@ -284,8 +284,8 @@ impl Graph {
                 }))?;
 
             let (node, parent_node) = registry.get2_mut(node_id, parent_id)
-            .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
-            .map_err(|err| err.with_trace(top_trace.clone()))?;
+                .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
+                .map_err(|err| err.with_trace(top_trace.clone()))?;
 
             parent_node.flow_data(
                 node,

@@ -1,4 +1,4 @@
-# 0.1.10
+# 0.1.11
 
 - Fixes for some broken parts of `cache_all`
 

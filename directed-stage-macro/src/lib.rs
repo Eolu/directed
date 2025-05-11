@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro_error::proc_macro_error;
@@ -43,6 +44,7 @@ pub fn stage(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 // Configuration structs
+#[derive(Clone)]
 struct StageConfig {
     original_fn: ItemFn,
     stage_name: syn::Ident,
@@ -53,6 +55,7 @@ struct StageConfig {
     state_type: proc_macro2::TokenStream
 }
 
+#[derive(Clone)]
 enum RefType {
     Owned,
     Borrowed,
@@ -69,6 +72,7 @@ impl RefType {
     }
 }
 
+#[derive(Clone)]
 struct InputParam {
     name: syn::Ident,
     type_: Type,
@@ -348,15 +352,28 @@ fn generate_extraction_code(inputs: &[InputParam], cache_strategy: (CacheStrateg
         match cache_strategy {
             (CacheStrategy::None, _span) => quote_spanned! {input_span=>
                 // Non-transparent functions never clone, always move
-                let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
-                    let dc = std::sync::Arc::downcast::<#arg_type>(input);
-                    match dc {
-                        Ok(val) => (val, reeval_rule),
-                        #[allow(unused_variables)]
-                        Err(e) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
+                let #reeval_name: directed::ReevaluationRule = inputs.get(&directed::DataLabel::new(#clean_arg_name))
+                    .map(|(_, reeval_rule)| *reeval_rule).ok_or_else(|| directed::InjectionError::InputNotFound(#clean_arg_name.into()))?;
+                let #arg_name: std::sync::Arc<#arg_type> = if #reeval_name == directed::ReevaluationRule::Move {
+                    if let Some((input, _)) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
+                        let dc = std::sync::Arc::downcast::<#arg_type>(input);
+                        match dc {
+                            Ok(val) => val,
+                            #[allow(unused_variables)]
+                            Err(e) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
+                        }
+                    } else {
+                        return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
                     }
                 } else {
-                    return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
+                    if let Some((input, _)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
+                        match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
+                            Ok(val) => val,
+                            Err(_) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
+                        }
+                    } else {
+                        return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
+                    }
                 };
             },
             // TODO: Check if "All" needs something different
