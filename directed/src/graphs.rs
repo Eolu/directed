@@ -6,11 +6,7 @@ use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
 use std::collections::HashMap;
 
 use crate::{
-    EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError,
-    NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError,
-    registry::Registry,
-    stage::{EvalStrategy, ReevaluationRule},
-    types::DataLabel,
+    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError
 };
 
 #[macro_export]
@@ -52,7 +48,7 @@ macro_rules! graph {
     (nodes: $nodes:expr, connections: { $($left_node:ident$(: $output:expr)? => $right_node:ident$(: $input:expr)?,)* }) => {
         {
             #[allow(unused_mut)]
-            let mut graph = directed::Graph::from_node_indices($nodes.as_ref());
+            let mut graph = directed::Graph::from_node_ids($nodes.as_ref());
             loop {
                 $(
                     if let Err(e) = graph_internal!(graph => $left_node $(: $output)? => $right_node $(: $input)?,)
@@ -72,8 +68,8 @@ macro_rules! graph {
 /// See [`Registry`] for where state comes in.
 #[derive(Debug, Clone)]
 pub struct Graph {
-    pub(super) dag: Dag<usize, EdgeInfo>,
-    pub(super) node_indices: HashMap<usize, NodeIndex>,
+    pub(super) dag: Dag<NodeId, EdgeInfo>,
+    pub(super) node_indices: HashMap<NodeId, NodeIndex>,
 }
 
 /// Information about connections between nodes, purely an implementation
@@ -94,16 +90,16 @@ impl Graph {
 
     /// Takes a slice of node indicies and adds them to an unconnected graph.
     /// These are the indices returned by [`Registry::register`]
-    pub fn from_node_indices(node_indices: &[usize]) -> Self {
+    pub fn from_node_ids(node_ids: &[NodeId]) -> Self {
         let mut graph = Self::new();
-        for i in node_indices {
+        for i in node_ids {
             graph.add_node(*i);
         }
         graph
     }
 
     /// Adds a new node to the graph, by its [`Registry`] index.
-    pub fn add_node(&mut self, id: usize) -> NodeIndex {
+    pub fn add_node(&mut self, id: NodeId) -> NodeIndex {
         // TODO: Use node weights in a better way
         let idx = self.dag.add_node(id);
         self.node_indices.insert(id, idx);
@@ -114,19 +110,19 @@ impl Graph {
     /// in a new graph edge. See [`Registry`]
     pub fn connect(
         &mut self,
-        from_id: usize,
-        to_id: usize,
+        from_id: NodeId,
+        to_id: NodeId,
         source_output: DataLabel,
         target_input: DataLabel,
     ) -> Result<(), EdgeCreationError> {
         let from_idx = self
             .node_indices
             .get(&from_id)
-            .ok_or_else(|| NodesNotFoundError::from(&[from_id] as &[usize]))?;
+            .ok_or_else(|| NodesNotFoundError::from(&[from_id] as &[NodeId]))?;
         let to_idx = self
             .node_indices
             .get(&to_id)
-            .ok_or_else(|| NodesNotFoundError::from(&[to_id] as &[usize]))?;
+            .ok_or_else(|| NodesNotFoundError::from(&[to_id] as &[NodeId]))?;
         self.dag
             .add_edge(
                 *from_idx,
@@ -228,7 +224,7 @@ impl Graph {
         // Get mutable ref to node
         let node = registry.get_mut(node_id).ok_or_else(|| {
             ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
-                &[node_id] as &[usize],
+                &[node_id] as &[NodeId],
             )))
             .with_trace(top_trace.clone())
         })?;
@@ -312,7 +308,7 @@ impl Graph {
             // Determine if we need to evaluate
             registry.take_node(node_id).ok_or_else(|| {
                 ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
-                    &[node_id] as &[usize],
+                    &[node_id] as &[NodeId],
                 )))
                 .with_trace(top_trace)
             })?
@@ -342,7 +338,7 @@ impl Graph {
         &self,
         registry: &mut Registry,
         top_trace: GraphTrace,
-        node_id: usize,
+        node_id: NodeId,
         parents: &[(EdgeIndex, NodeIndex)],
     ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         for parent in parents {
@@ -422,7 +418,7 @@ impl Graph {
                 Some(node) => node,
                 None => {
                     return Err(NodeExecutionError::from(NodesNotFoundError::from(
-                        &[node_id] as &[usize],
+                        &[node_id] as &[NodeId],
                     )));
                 }
             };
@@ -436,7 +432,7 @@ impl Graph {
     fn get_node_id_from_node_index(
         &self,
         idx: NodeIndex,
-    ) -> Result<usize, NodeNotFoundInGraphError> {
+    ) -> Result<NodeId, NodeNotFoundInGraphError> {
         self.dag
             .node_weight(idx)
             .map(|n| *n)

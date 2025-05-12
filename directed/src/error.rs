@@ -1,5 +1,5 @@
 //! Errors and the graph trace system
-use crate::{AnyNode, DataLabel, Graph, Registry};
+use crate::{AnyNode, DataLabel, Graph, NodeId, Registry};
 use std::{
     borrow::Cow,
     fmt::{self, Display, Formatter, Write},
@@ -72,10 +72,10 @@ pub struct NodeTypeMismatchError {
 
 #[derive(thiserror::Error, Debug)]
 #[error("Nodes with id `{0:?}` not found in registry")]
-pub struct NodesNotFoundError(Vec<usize>);
+pub struct NodesNotFoundError(Vec<NodeId>);
 
-impl From<&[usize]> for NodesNotFoundError {
-    fn from(value: &[usize]) -> Self {
+impl From<&[NodeId]> for NodesNotFoundError {
+    fn from(value: &[NodeId]) -> Self {
         Self(Vec::from(value))
     }
 }
@@ -147,7 +147,7 @@ impl std::fmt::Debug for GraphTrace {
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     /// The unique ID of the node.
-    pub id: usize,
+    pub id: NodeId,
     /// The name of the node.
     pub name: String,
     /// The input names of the node.
@@ -162,11 +162,11 @@ pub struct NodeInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionInfo {
     /// The ID of the source node.
-    pub source_id: usize,
+    pub source_id: NodeId,
     /// The output label of the source node.
     pub source_output: DataLabel,
     /// The ID of the target node.
-    pub target_id: usize,
+    pub target_id: NodeId,
     /// The input label of the target node.
     pub target_input: DataLabel,
     /// Used for debugging purposes
@@ -176,7 +176,7 @@ pub struct ConnectionInfo {
 // Extension to Registry to allow access to nodes by ID
 impl Registry {
     /// Gets a node by its ID.
-    pub fn get_node_by_id(&self, id: usize) -> Option<&Box<dyn AnyNode>> {
+    pub fn get_node_by_id(&self, id: NodeId) -> Option<&Box<dyn AnyNode>> {
         self.0.get(id).map(|node| node.as_ref()).flatten()
     }
 }
@@ -239,7 +239,7 @@ impl Graph {
 
 impl GraphTrace {
     /// Emphasizes a node in the trace
-    pub fn highlight_node(&mut self, node: usize) {
+    pub fn highlight_node(&mut self, node: NodeId) {
         if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node) {
             node.highlighted = true;
         }
@@ -248,9 +248,9 @@ impl GraphTrace {
     /// Emphasizes a connection in the trace
     pub fn highlight_connection(
         &mut self,
-        source_node: usize,
+        source_node: NodeId,
         source_output: DataLabel,
-        target_node: usize,
+        target_node: NodeId,
         target_input: DataLabel,
     ) {
         if let Some(conn) = self.connections.iter_mut().find(|conn| {

@@ -18,11 +18,10 @@ pub enum RefType {
 }
 
 /// Defines all the information about how a stage is handled.
+#[cfg_attr(feature = "tokio", async_trait::async_trait)]
 pub trait Stage: Clone {
     /// Internal state only, no special rules apply to this
     type State;
-    /// The base function for this stage
-    type BaseFn;
 
     /// Used for typechecking inputs.
     fn inputs(&self) -> &HashMap<DataLabel, (TypeId, RefType)>;
@@ -30,6 +29,14 @@ pub trait Stage: Clone {
     fn outputs(&self) -> &HashMap<DataLabel, TypeId>;
     /// Evaluate the stage with the given input and state
     fn evaluate(
+        &self,
+        state: &mut Self::State,
+        inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
+        cache: &mut HashMap<u64, Vec<crate::Cached>>,
+    ) -> Result<NodeOutput, InjectionError>;
+    /// async version of evaluate
+    #[cfg(feature = "tokio")]
+    async fn evaluate_async(
         &self,
         state: &mut Self::State,
         inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
@@ -56,9 +63,6 @@ pub trait Stage: Clone {
 
     /// Stage name, used for debugging information
     fn name(&self) -> &str;
-
-    /// Pointer to the function this wraps
-    fn get_fn() -> Self::BaseFn;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

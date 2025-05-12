@@ -224,7 +224,7 @@ fn main() {
     // - Recursively evaluate it's parents (so node_3 will request node_2, which will request node_1 twice)
     // - node_1 will evaluate, printing "Running stage 1", and pass a clone of its output to "input" on node_2.
     // - node_1 will not evaluate again, and just pass a clone of its output to "input2" on node_2.
-    // - node_2 will evaluate, printing its output then moving (not cloning) its output to node_3.
+    // - node_2 will evaluate, printing its output then moving (no`t cloning) its output to node_3.
     // - node_3 will evaluate, printing its output that passing the assert successfully.
     graph.execute(&mut registry).unwrap();
 }
@@ -241,13 +241,11 @@ The `tokio` feature adds async evaluation. This simply means that a node will ev
 - Wrap your graph in an `Arc`: `let graph = Arc::new(graph);`
 - Instead of calling `execute`, call `execute_async` on the `Arc<Graph>`.
 
-That's it. Currently, stages can't be marked async, but they can be executed independantly in an async context.
-- TODO: In a future update, stages themselves will be allowed to be async. The docs will go here.
+Stages marked `async` will behave as expected - executing within the async context.
 
 ```rust
-
+// TODO: example here
 ```
-- TODO: example here
 
 ## WIP features/ideas/TODOs
 

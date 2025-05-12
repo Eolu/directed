@@ -50,8 +50,10 @@ pub fn stage(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[derive(Clone)]
 struct StageConfig {
     original_fn: ItemFn,
+    original_fn_renamed: syn::Ident,
     stage_name: syn::Ident,
     is_lazy: (bool, Span),
+    is_async: (bool, Span),
     cache_strategy: (CacheStrategy, Span),
     outputs: Vec<(String, Type, Span)>,
     inputs: Vec<InputParam>,
@@ -168,6 +170,7 @@ impl StageConfig {
     fn from_args(input_fn: &ItemFn, meta_args: &StageArgs) -> syn::Result<Self> {
         let stage_name = input_fn.sig.ident.clone();
 
+        let is_async = (input_fn.sig.asyncness.is_some(), input_fn.sig.asyncness.span());
         let mut is_lazy = (false, Span::call_site());
         let mut cache_strategy = (CacheStrategy::None, Span::call_site());
         let mut outputs = Vec::new();
@@ -206,10 +209,14 @@ impl StageConfig {
             outputs = Self::extract_outputs_from_return_type(&input_fn.sig.output)?;
         }
 
+        let original_fn_renamed = quote::format_ident!("original_fn_{}", stage_name);
+
         Ok(StageConfig {
             original_fn: input_fn.clone(),
+            original_fn_renamed,
             stage_name,
             is_lazy,
+            is_async,
             cache_strategy,
             outputs,
             inputs,
@@ -533,6 +540,7 @@ fn generate_output_handling(
     cache_strategy: (CacheStrategy, Span),
 ) -> proc_macro2::TokenStream {
     // TODO: Right now cache_last and cache_all are handled more differently than necessary
+    let original_fn_renamed = &config.original_fn_renamed;
     let arg_names = config
         .inputs
         .iter()
@@ -571,14 +579,11 @@ fn generate_output_handling(
             paren_token: syn::token::Paren::default(),
             elems: Punctuated::new(),
         }));
-    let fn_call = if config.is_multi_output() {
-        quote_spanned! {Span::call_site()=>
-            Self::get_fn()(state, #(#arg_names),*)
-        }
-    } else {
-        quote_spanned! {Span::call_site()=>
-            directed::NodeOutput::new_simple(Self::get_fn()(state, #(#arg_names),*))
-        }
+    let fn_call = match (config.is_multi_output(), config.is_async.0) {
+        (true, true) => quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*).await },
+        (true, false) => quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*) },
+        (false, true) => quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*).await) },
+        (false, false) => quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*)) },
     };
 
     if cache_strategy.0 == CacheStrategy::All {
@@ -702,11 +707,13 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     let original_fn = &config.original_fn;
     let stage_name = &config.stage_name;
     let state_type = &config.state_type;
+    let original_fn_renamed = &config.original_fn_renamed;
     let fn_attrs = &original_fn.attrs;
     let fn_vis = &original_fn.vis;
     let original_args = &original_fn.sig.inputs;
     let fn_return_type = &original_fn.sig.output;
     let original_body = &original_fn.block;
+    let async_status = &original_fn.sig.asyncness;
 
     // Generate code sections
     let input_registrations = generate_input_registrations(&config.inputs);
@@ -733,6 +740,21 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         }
     };
 
+    // Redefine the original function
+    let new_fn_definition = quote::quote!{
+        #(#fn_attrs)*
+        #async_status fn #original_fn_renamed(state: &mut #state_type, #original_args) #fn_return_type #original_body
+    };
+
+    // Slap together eval logic
+    let eval_logic = quote_spanned! {Span::call_site()=>
+        #(#extraction_code)*
+        #(#prepare_input_types_code)*
+        #output_handling
+    };
+    let sync_eval_logic = if async_status.is_some() { quote::quote!(panic!("Attempted to call async code synchronously")) } else { quote::quote!(#eval_logic) };
+    let async_eval_logic = if async_status.is_some() { quote::quote!(#eval_logic) } else { quote::quote!(#eval_logic) };
+
     // The coup de grace
     quote_spanned! {Span::call_site()=>
         // Create a struct implementing the Stage trait
@@ -752,9 +774,13 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
             }
         }
 
+        // Recreate the original function
+        #[allow(non_snake_case)]
+        #new_fn_definition
+
+        #[cfg_attr(feature = "tokio", async_trait::async_trait)]
         impl directed::Stage for #stage_name {
             type State = #state_type;
-            type BaseFn = fn(state: &mut #state_type, #original_args) #fn_return_type;
 
             fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
                 &self.inputs
@@ -770,9 +796,17 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>,
                 cache: &mut std::collections::HashMap<u64, Vec<directed::Cached>>
             ) -> Result<directed::NodeOutput, directed::InjectionError> {
-                #(#extraction_code)*
-                #(#prepare_input_types_code)*
-                #output_handling
+                #sync_eval_logic
+            }
+            
+            #[cfg(feature = "tokio")]
+            async fn evaluate_async(
+                &self,
+                state: &mut Self::State,
+                inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>,
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached>>
+            ) -> Result<directed::NodeOutput, directed::InjectionError> {
+                #async_eval_logic
             }
 
             fn eval_strategy(&self) -> directed::EvalStrategy {
@@ -789,12 +823,6 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
 
             fn name(&self) -> &str {
                 stringify!(#stage_name)
-            }
-
-            fn get_fn() -> Self::BaseFn {
-                #(#fn_attrs)*
-                fn original_fn(state: &mut #state_type, #original_args) #fn_return_type #original_body
-                return original_fn;
             }
         }
     }

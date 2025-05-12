@@ -10,7 +10,7 @@ pub use directed_stage_macro::stage;
 pub use error::*;
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DowncastEq, Node};
-pub use registry::Registry;
+pub use registry::{Registry, NodeId};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, NodeOutput};
 
@@ -672,25 +672,32 @@ mod async_tests {
     use super::*;
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn parallel_execution_test() {
+        use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+        // FIXME: Unsurprisingly, the dubious test occasionally failes
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let (tx1, rx1) = unbounded_channel::<u8>();
+        let (tx2, rx2) = unbounded_channel::<u8>();
 
-        #[stage(lazy)]
-        fn SlowStage1() -> i32 {
+        #[stage(lazy, state((UnboundedSender<u8>, UnboundedReceiver<u8>)))]
+        async fn SlowStage1() -> i32 {
             println!("Running SlowStage1");
+            let (tx, rx) = state;
+            tx.send(1).unwrap();
+            assert_eq!(rx.recv().await.unwrap(), 2);
             COUNTER.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(1000));
             42
         }
 
-        #[stage(lazy)]
-        fn SlowStage2() -> String {
+        #[stage(lazy, state((UnboundedSender<u8>, UnboundedReceiver<u8>)))]
+        async fn SlowStage2() -> String {
             println!("Running SlowStage2");
+            let (tx, rx) = state;
+            assert_eq!(rx.recv().await.unwrap(), 1);
+            tx.send(2).unwrap();
             COUNTER.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(1000));
             "hello".to_string()
         }
 
@@ -701,8 +708,8 @@ mod async_tests {
         }
 
         let mut registry = Registry::new();
-        let stage1 = registry.register(SlowStage1::new());
-        let stage2 = registry.register(SlowStage2::new());
+        let stage1 = registry.register_with_state(SlowStage1::new(), (tx1, rx2));
+        let stage2 = registry.register_with_state(SlowStage2::new(), (tx2, rx1));
         let combine = registry.register(CombineStage::new());
 
         println!("Node {stage1} is SlowStage1");
@@ -723,24 +730,12 @@ mod async_tests {
         COUNTER.store(0, Ordering::SeqCst);
 
         // Time the execution
-        let start = std::time::Instant::now();
         graph
             .execute_async(tokio::sync::Mutex::new(registry))
             .await
             .unwrap();
-        let elapsed = start.elapsed();
 
         // Both slow stages should have been executed
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
-
-        println!("Execution completed in {:?}", elapsed);
-
-        // The execution should take less than 2000ms (if the stages ran in parallel)
-        // but give some wiggle room for test environment variability
-        assert!(
-            elapsed < Duration::from_millis(1900),
-            "Execution took {:?}, should be less than 1900ms if parallel",
-            elapsed
-        );
     }
 }

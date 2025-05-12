@@ -1,3 +1,7 @@
+# 0.1.15
+
+- True async stages now implemented.
+
 # 0.1.14
 
 - Made the `graph` macro more clean.

@@ -6,6 +6,9 @@ use crate::{
 };
 use std::any::TypeId;
 
+/// Used to access nodes within the registry, just a simple `usize` alias
+pub type NodeId = usize;
+
 /// A [Registry] stores each node, its state, and the logical [Stage]
 /// associated with it.
 pub struct Registry(pub(super) Vec<Option<Box<dyn AnyNode>>>);
@@ -16,7 +19,7 @@ impl Registry {
     }
 
     /// Get a reference to the state of a specific node.
-    pub fn state<S: Stage + 'static>(&self, id: usize) -> Result<&S::State, RegistryError> {
+    pub fn state<S: Stage + 'static>(&self, id: NodeId) -> Result<&S::State, RegistryError> {
         self.validate_node_type::<S>(id)?;
         match self.0.get(id) {
             Some(Some(any_node)) => match any_node.as_any().downcast_ref::<Node<S>>() {
@@ -28,14 +31,14 @@ impl Registry {
                 .into()),
             },
             // TODO: Handle Some(None) as a special case, as this means the node is busy
-            None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
+            None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[NodeId]).into()),
         }
     }
 
     /// Get a mutable reference to the state of a specific node.
     pub fn state_mut<S: Stage + 'static>(
         &mut self,
-        id: usize,
+        id: NodeId,
     ) -> Result<&mut S::State, RegistryError> {
         self.validate_node_type::<S>(id)?;
         match self.0.get_mut(id) {
@@ -51,14 +54,14 @@ impl Registry {
                 }
             }
             // TODO: Handle Some(None) as a special case, as this means the node is busy
-            None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
+            None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[NodeId]).into()),
         }
     }
 
     /// Add a node to the registry. This returns a unique identifier for that
     /// node, which can be used to add it to a [crate::Graph]. This uses default
     /// state
-    pub fn register<S: Stage + Send + 'static>(&mut self, stage: S) -> usize
+    pub fn register<S: Stage + Send + 'static>(&mut self, stage: S) -> NodeId
     where
         S::State: Default + Send,
     {
@@ -74,7 +77,7 @@ impl Registry {
         &mut self,
         stage: S,
         state: S::State,
-    ) -> usize
+    ) -> NodeId
     where
         S::State: Send,
     {
@@ -85,7 +88,7 @@ impl Registry {
 
     /// Returns an error if the registry doesn't contain a node with a stage
     /// of the specified type with the given id.
-    pub fn validate_node_type<S: Stage + 'static>(&self, id: usize) -> Result<(), RegistryError> {
+    pub fn validate_node_type<S: Stage + 'static>(&self, id: NodeId) -> Result<(), RegistryError> {
         match self.0.get(id) {
             Some(Some(node)) => match node.as_any().downcast_ref::<Node<S>>() {
                 Some(_) => Ok(()),
@@ -96,7 +99,7 @@ impl Registry {
                 .into()),
             },
             // TODO: Handle Some(None) as a special case, as this means the node is busy
-            None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
+            None | Some(None) => Err(NodesNotFoundError::from(&[id] as &[NodeId]).into()),
         }
     }
 
@@ -104,7 +107,7 @@ impl Registry {
     /// S doesn't match the stage type for that node.
     pub fn unregister<S: Stage + 'static>(
         &mut self,
-        id: usize,
+        id: NodeId,
     ) -> Result<Option<Node<S>>, RegistryError> {
         self.validate_node_type::<S>(id)?;
         match self.0.get_mut(id) {
@@ -124,15 +127,15 @@ impl Registry {
     }
 
     /// Remove a node from the registry and drop it.
-    pub fn unregister_and_drop(&mut self, id: usize) -> Result<(), RegistryError> {
+    pub fn unregister_and_drop(&mut self, id: NodeId) -> Result<(), RegistryError> {
         match self.0.get_mut(id).take().map(drop) {
             Some(_) => Ok(()),
-            None => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
+            None => Err(NodesNotFoundError::from(&[id] as &[NodeId]).into()),
         }
     }
 
     /// Get a type-erased node
-    pub fn get(&self, id: usize) -> Option<&Box<dyn AnyNode>> {
+    pub fn get(&self, id: NodeId) -> Option<&Box<dyn AnyNode>> {
         match self.0.get(id) {
             Some(Some(node)) => Some(node),
             // TODO: Handle Some(None) as a special case, as this means the node is busy
@@ -142,7 +145,7 @@ impl Registry {
     }
 
     /// Get a mutable type-erased node
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut Box<dyn AnyNode>> {
+    pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Box<dyn AnyNode>> {
         match self.0.get_mut(id) {
             Some(Some(node)) => Some(node),
             // TODO: Handle Some(None) as a special case, as this means the node is busy
@@ -159,8 +162,8 @@ impl Registry {
     /// This function will panic if id0 and id1 are the same.
     pub fn get2_mut(
         &mut self,
-        id0: usize,
-        id1: usize,
+        id0: NodeId,
+        id1: NodeId,
     ) -> Result<(&mut Box<dyn AnyNode>, &mut Box<dyn AnyNode>), NodesNotFoundError> {
         if id0 == id1 {
             panic!("Attempted to borrow node id {id0} twice")
@@ -168,17 +171,17 @@ impl Registry {
         let first_id = std::cmp::min(id0, id1);
         let second_id = std::cmp::max(id0, id1);
         match (self.0.len() < id0, self.0.len() < id1) {
-            (true, true) => return Err(NodesNotFoundError::from(&[id0, id1] as &[usize])),
-            (true, false) => return Err(NodesNotFoundError::from(&[id0] as &[usize])),
-            (false, true) => return Err(NodesNotFoundError::from(&[id1] as &[usize])),
+            (true, true) => return Err(NodesNotFoundError::from(&[id0, id1] as &[NodeId])),
+            (true, false) => return Err(NodesNotFoundError::from(&[id0] as &[NodeId])),
+            (false, true) => return Err(NodesNotFoundError::from(&[id1] as &[NodeId])),
             _ => (),
         }
 
         if let [first, .., second] = &mut self.0[first_id..=second_id] {
             match (first, second) {
-                (None, None) => Err(NodesNotFoundError::from(&[id0, id1] as &[usize])),
-                (None, Some(_)) => Err(NodesNotFoundError::from(&[id0] as &[usize])),
-                (Some(_), None) => Err(NodesNotFoundError::from(&[id1] as &[usize])),
+                (None, None) => Err(NodesNotFoundError::from(&[id0, id1] as &[NodeId])),
+                (None, Some(_)) => Err(NodesNotFoundError::from(&[id0] as &[NodeId])),
+                (Some(_), None) => Err(NodesNotFoundError::from(&[id1] as &[NodeId])),
                 (Some(first), Some(second)) => {
                     if first_id == id1 {
                         Ok((first, second))
@@ -196,7 +199,7 @@ impl Registry {
     /// This does not unregister the node, and it can be placed back
     /// inside the registry via it's ID. Returns None if the node is
     /// already taken or never existed.
-    pub fn take_node(&mut self, id: usize) -> Option<Box<dyn AnyNode>> {
+    pub fn take_node(&mut self, id: NodeId) -> Option<Box<dyn AnyNode>> {
         match self.0.get_mut(id) {
             Some(maybe_node) => maybe_node.take(),
             None => None,
@@ -206,7 +209,7 @@ impl Registry {
     /// Insert a node with the given ID back into the registry. Panics
     /// if the node never existed at that ID in the first place.
     // TODO: This could be a more frindly error
-    pub fn replace_node(&mut self, id: usize, node: Box<dyn AnyNode>) {
+    pub fn replace_node(&mut self, id: NodeId, node: Box<dyn AnyNode>) {
         *self.0.get_mut(id).unwrap() = Some(node);
     }
 }
