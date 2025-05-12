@@ -6,7 +6,11 @@ use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
 use std::collections::HashMap;
 
 use crate::{
-    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError
+    EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError,
+    NodeId, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError,
+    registry::Registry,
+    stage::{EvalStrategy, ReevaluationRule},
+    types::DataLabel,
 };
 
 #[macro_export]

@@ -170,7 +170,10 @@ impl StageConfig {
     fn from_args(input_fn: &ItemFn, meta_args: &StageArgs) -> syn::Result<Self> {
         let stage_name = input_fn.sig.ident.clone();
 
-        let is_async = (input_fn.sig.asyncness.is_some(), input_fn.sig.asyncness.span());
+        let is_async = (
+            input_fn.sig.asyncness.is_some(),
+            input_fn.sig.asyncness.span(),
+        );
         let mut is_lazy = (false, Span::call_site());
         let mut cache_strategy = (CacheStrategy::None, Span::call_site());
         let mut outputs = Vec::new();
@@ -580,10 +583,18 @@ fn generate_output_handling(
             elems: Punctuated::new(),
         }));
     let fn_call = match (config.is_multi_output(), config.is_async.0) {
-        (true, true) => quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*).await },
-        (true, false) => quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*) },
-        (false, true) => quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*).await) },
-        (false, false) => quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*)) },
+        (true, true) => {
+            quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*).await }
+        }
+        (true, false) => {
+            quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*) }
+        }
+        (false, true) => {
+            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*).await) }
+        }
+        (false, false) => {
+            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*)) }
+        }
     };
 
     if cache_strategy.0 == CacheStrategy::All {
@@ -741,7 +752,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     };
 
     // Redefine the original function
-    let new_fn_definition = quote::quote!{
+    let new_fn_definition = quote::quote! {
         #(#fn_attrs)*
         #async_status fn #original_fn_renamed(state: &mut #state_type, #original_args) #fn_return_type #original_body
     };
@@ -752,8 +763,16 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         #(#prepare_input_types_code)*
         #output_handling
     };
-    let sync_eval_logic = if async_status.is_some() { quote::quote!(panic!("Attempted to call async code synchronously")) } else { quote::quote!(#eval_logic) };
-    let async_eval_logic = if async_status.is_some() { quote::quote!(#eval_logic) } else { quote::quote!(#eval_logic) };
+    let sync_eval_logic = if async_status.is_some() {
+        quote::quote!(panic!("Attempted to call async code synchronously"))
+    } else {
+        quote::quote!(#eval_logic)
+    };
+    let async_eval_logic = if async_status.is_some() {
+        quote::quote!(#eval_logic)
+    } else {
+        quote::quote!(#eval_logic)
+    };
 
     // The coup de grace
     quote_spanned! {Span::call_site()=>
@@ -798,7 +817,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
             ) -> Result<directed::NodeOutput, directed::InjectionError> {
                 #sync_eval_logic
             }
-            
+
             #[cfg(feature = "tokio")]
             async fn evaluate_async(
                 &self,

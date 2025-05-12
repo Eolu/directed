@@ -10,7 +10,7 @@ pub use directed_stage_macro::stage;
 pub use error::*;
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DowncastEq, Node};
-pub use registry::{Registry, NodeId};
+pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, NodeOutput};
 
@@ -675,7 +675,7 @@ mod async_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn parallel_execution_test() {
-        use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
+        use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
         // FIXME: Unsurprisingly, the dubious test occasionally failes
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let (tx1, rx1) = unbounded_channel::<u8>();

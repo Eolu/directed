@@ -212,7 +212,8 @@ where
         let mut old_outputs = HashMap::new();
         let outputs = self
             .stage
-            .evaluate_async(&mut self.state, &mut self.inputs, &mut self.cache).await?;
+            .evaluate_async(&mut self.state, &mut self.inputs, &mut self.cache)
+            .await?;
 
         match outputs {
             NodeOutput::Standard(val) => {
