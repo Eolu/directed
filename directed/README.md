@@ -243,7 +243,7 @@ The `tokio` feature adds async evaluation. This simply means that a node will ev
 
 Stages marked `async` will behave as expected - executing within the async context.
 
-TODO: Add pallatable example. For now, [Take a look at this test for an example](https://github.com/Eolu/directed/blob/bddabc371e43511bac53ac2aca1e816bb1705c9b/directed/src/lib.rs#L677).
+TODO: Add pallatable example. For now, [Take a look at this test for an example](https://github.com/Eolu/directed/blob/ca34d23a32703162a011f39e578bc4e5e5dda0c8/directed/src/lib.rs#L677).
 
 ## WIP features/ideas/TODOs
 
