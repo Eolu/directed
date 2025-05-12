@@ -12,7 +12,7 @@ pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DowncastEq, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
-pub use types::{DataLabel, NodeOutput};
+pub use types::{DataLabel, NodeOutput, GraphOutput};
 
 #[cfg(test)]
 mod tests {
@@ -57,6 +57,28 @@ mod tests {
         .unwrap();
 
         graph.execute(&mut registry).unwrap();
+    }
+
+    /// Test to verify that the output of a graph can be obtained
+    #[test]
+    fn get_output_test() {
+        #[stage]
+        fn TinyStage1() -> String {
+            println!("Running stage 1");
+            String::from("This is the output!")
+        }
+
+        let mut registry = Registry::new();
+        let node_1 = registry.register(TinyStage1::new());
+        let graph = graph! {
+            nodes: [node_1],
+            connections: {}
+        }
+        .unwrap();
+
+        graph.execute(&mut registry).unwrap();
+        let mut outputs = graph.get_output(&mut registry).unwrap();
+        assert_eq!(outputs.take_unnamed::<String>(node_1).unwrap(), String::from("This is the output!"))
     }
 
     // Test multiple output stages

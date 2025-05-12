@@ -1,5 +1,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
+use crate::{node::UNNAMED_OUTPUT_NAME, NodeId};
+
 /// Simple macro to simulate a function that can return mutlieple names outputs
 #[macro_export]
 macro_rules! output {
@@ -130,5 +132,53 @@ impl DataLabel {
 impl From<&str> for DataLabel {
     fn from(value: &str) -> Self {
         Self::new(value)
+    }
+}
+
+/// Used to represent graph outputs.
+pub struct GraphOutput(HashMap<NodeId, HashMap<DataLabel, Arc<dyn Any + Send + Sync>>>);
+
+impl GraphOutput {
+    pub(crate) fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub(crate) fn insert(&mut self, node_id: NodeId, data_label: impl Into<DataLabel>, item: Arc<dyn Any + Send + Sync>) {
+        if self.0.get(&node_id).is_none() {
+            self.0.insert(node_id, HashMap::new());
+        }
+        self.0.get_mut(&node_id).unwrap().insert(data_label.into(), item);
+    }
+
+    /// Gets an output from a particular node
+    pub fn get<T: Any + Send + Sync>(&self, node_id: NodeId, data_label: impl Into<DataLabel>) -> Option<&T> {
+        // TODO: More in-depth error reporting here
+        self.0.get(&node_id).and_then(|map| map.get(&data_label.into())).and_then(|arc| arc.downcast_ref())
+    }
+
+    /// Gets an unnamed output from a particular node
+    /// 
+    /// Note that the unnamed output can also be accessed via the name '_'
+    pub fn get_unnamed<T: Any + Send + Sync>(&self, node_id: NodeId) -> Option<&T> {
+        // TODO: More in-depth error reporting here
+        self.0.get(&node_id).and_then(|map| map.get(&UNNAMED_OUTPUT_NAME)).and_then(|arc| arc.downcast_ref())
+    }
+
+    /// Attempts to take and remove a specific output
+    pub fn take<T: Any + Send + Sync>(&mut self, node_id: NodeId, data_label: impl Into<DataLabel>) -> Option<T> {
+        // TODO: More in-depth error reporting here
+        self.0.get_mut(&node_id).and_then(|map| map.remove(&data_label.into())).and_then(|arc| {
+            arc.downcast().ok().and_then(|arc| Arc::into_inner(arc))
+        })
+    }
+
+    /// Attempts to take and remove the output.
+    /// 
+    /// Note that the unnamed output can also be accessed via the name '_'
+    pub fn take_unnamed<T: Any + Send + Sync>(&mut self, node_id: NodeId) -> Option<T> {
+        // TODO: More in-depth error reporting here
+        self.0.get_mut(&node_id).and_then(|map| map.remove(&UNNAMED_OUTPUT_NAME)).and_then(|arc| {
+            arc.downcast().ok().and_then(|arc| Arc::into_inner(arc))
+        })
     }
 }

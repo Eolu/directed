@@ -1,3 +1,7 @@
+# 0.1.16
+
+- Graph outputs can now be accessed, but still a bit too primitive.
+
 # 0.1.15
 
 - True async stages now implemented.

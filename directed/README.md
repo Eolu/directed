@@ -93,7 +93,7 @@ fn CacheLastStage(num: u32) -> String {
 Preconditions:
 - All inputs must be `PartialEq` (compile-time error if condition is not met)
 - All inputs must be `Clone` (compile-time error if condition is not met)
-- Outputs must be `Clone` UNLESS all connected child nodes take input only by reference (runtime error neither of these conditions are met)
+- Outputs must be `Clone` UNLESS all connected child nodes take input only by reference (runtime error if neither of these conditions are met)
 
 #### Cache All
 Stages can be annotated with `cache_all`. This means that for any previously identical input, return the associated output without reevaluating.
@@ -248,6 +248,7 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 ## WIP features/ideas/TODOs
 
 - High priority: Accept inputs for top-level nodes, return outputs from leaf nodes (important because it finally makes this crate a drop-in replacement for... anywhere you want a graph that you didn't use to have a graph)
+    - Partially implemented, outputs from leaf nodes can be accessed. The API is a bit raw still, and input injection is still missing
 - High priority: Handle when a node is unavailable from the registry in async execution (wait until it's available again)
     - There is in general more testing and work needed around this bullet. The registry serves as a node library that hands out nodes to be evaluated - and expects them to be returned when evaluation is done. Right now it will just give up if it attempts to concurrently execute the same node at the same time. Waiting is easy - but there are likely some situations where it CAN be valid to execute the same node at the same time. This will take a bit of plumbing in the proc macro.
 - Automatic validators to make sure correct input and output types are present if required (right now this would halt graph evaluation mid-way through and give an error, but there's no reason it can't do that before even starting evaluation)
@@ -255,7 +256,7 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 - Improve error system to be cleaner (it works but the different types of errors feel non-intuitive)
 - A Graph + Registry could be combined to create a Node (with a baked stage). Right now we combine nodes with stages to make the registry, and registries with graphs. If we could instead combine STAGES with graphs, then output a valid registry full of nodes based on that combination, it would avoid the possibility of combining a registry with an invalid graph entirely. (or even, full graph sharding?)
 - An attribute that makes it serialize the cache and store between runs (this may be out of scope, but if so at least make sure the design doesn't prohibit someone from doing this).
-- A way to reset all registry state at once (probably only slightly harder to implement than it was to right this bullet point)
+- A way to reset all registry state at once (probably only slightly harder to implement than it was to write this bullet point)
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)

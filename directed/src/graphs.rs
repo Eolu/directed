@@ -3,14 +3,10 @@
 //! built from a single registry.
 // TODO: The above could be made safe and easy to do, and likely is worth it
 use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
-use std::collections::HashMap;
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use crate::{
-    EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError,
-    NodeId, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError,
-    registry::Registry,
-    stage::{EvalStrategy, ReevaluationRule},
-    types::DataLabel,
+    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError
 };
 
 #[macro_export]
@@ -253,11 +249,24 @@ impl Graph {
     }
 
     /// This will take an output from the graph, either cloning it or removing it entirely, based on cache settings.
-    pub fn get_output(&self, _registry: &mut Registry) -> NodeOutput {
-        // TODO: Iterate through registry. For each node, see if it has an unconnected output. That is graph output!
-        // Do not touch connected outputs
-        // Later we will do something for inputs too
-        todo!()
+    pub fn get_output(&self, registry: &mut Registry) -> Result<GraphOutput, NodeExecutionError> {
+        let urgent_nodes = self.urgent_nodes(registry)?;
+        let mut results = GraphOutput::new();
+        for idx in urgent_nodes {
+            let node_id = self.get_node_id_from_node_index(*idx)?;
+            if let Some(node) = registry.get_mut(node_id) {
+                if node.reeval_rule() == ReevaluationRule::Move {
+                    for (k, v) in node.outputs_mut().drain() {
+                        results.insert(node_id, k, v);
+                    }
+                } else {
+                    for (k, v) in node.outputs_mut() {
+                        results.insert(node_id, k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        Ok(results)
     }
 
     /// Execute a single node's stage asynchronously within the graph. This will recursively execute
