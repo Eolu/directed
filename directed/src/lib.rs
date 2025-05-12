@@ -673,7 +673,7 @@ mod async_tests {
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn parallel_execution_test() {
         use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
         // FIXME: Unsurprisingly, the dubious test occasionally failes

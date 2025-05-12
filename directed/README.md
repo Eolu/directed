@@ -243,9 +243,7 @@ The `tokio` feature adds async evaluation. This simply means that a node will ev
 
 Stages marked `async` will behave as expected - executing within the async context.
 
-```rust
-// TODO: example here
-```
+TODO: Add pallatable example. For now, [Take a look at this test for an example](https://github.com/Eolu/directed/blob/bddabc371e43511bac53ac2aca1e816bb1705c9b/directed/src/lib.rs#L677).
 
 ## WIP features/ideas/TODOs
 
