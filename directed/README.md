@@ -32,7 +32,7 @@ When possible, the error types in this crate contain a trace of the graph and ha
 
 ## Current project status
 
-- WIP: Examples work but many intended features are still missing, and the codebase structure is in general in an "under-construction" state. TODOs littered throughout the codebase need to be extracted out into a coherent plan.
+- WIP: Things work but quite a few key features are yet to be implemented, and a lot of cleanup/refactoring is still ongoing.
 
 ## Core API Concepts
 
