@@ -676,7 +676,6 @@ mod async_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn parallel_execution_test() {
         use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-        // FIXME: Unsurprisingly, the dubious test occasionally failes
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let (tx1, rx1) = unbounded_channel::<u8>();
         let (tx2, rx2) = unbounded_channel::<u8>();
