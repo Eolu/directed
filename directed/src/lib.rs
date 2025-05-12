@@ -12,7 +12,7 @@ pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DowncastEq, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
-pub use types::{DataLabel, NodeOutput, GraphOutput};
+pub use types::{DataLabel, GraphOutput, NodeOutput};
 
 #[cfg(test)]
 mod tests {
@@ -78,7 +78,10 @@ mod tests {
 
         graph.execute(&mut registry).unwrap();
         let mut outputs = graph.get_output(&mut registry).unwrap();
-        assert_eq!(outputs.take_unnamed::<String>(node_1).unwrap(), String::from("This is the output!"))
+        assert_eq!(
+            outputs.take_unnamed::<String>(node_1).unwrap(),
+            String::from("This is the output!")
+        )
     }
 
     // Test multiple output stages

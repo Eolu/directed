@@ -3,10 +3,14 @@
 //! built from a single registry.
 // TODO: The above could be made safe and easy to do, and likely is worth it
 use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use crate::{
-    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodeOutput, NodesNotFoundError
+    EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace,
+    NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodesNotFoundError,
+    registry::Registry,
+    stage::{EvalStrategy, ReevaluationRule},
+    types::DataLabel,
 };
 
 #[macro_export]
