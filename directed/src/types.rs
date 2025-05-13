@@ -205,4 +205,15 @@ impl GraphOutput {
             .and_then(|map| map.remove(&UNNAMED_OUTPUT_NAME))
             .and_then(|arc| arc.downcast().ok().and_then(|arc| Arc::into_inner(arc)))
     }
+
+    /// Get rid of this nice API and instead deal with the raw stuff inside it
+    pub fn into_inner(self) -> HashMap<NodeId, HashMap<DataLabel, Arc<dyn Any + Send + Sync>>> {
+        self.into()
+    }
+}
+
+impl From<GraphOutput> for HashMap<NodeId, HashMap<DataLabel, Arc<dyn Any + Send + Sync>>> {
+    fn from(value: GraphOutput) -> Self {
+        value.0
+    }
 }

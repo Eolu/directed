@@ -1,3 +1,7 @@
+# 0.1.17
+
+- Inputs to top-level nodes can now be injected.
+
 # 0.1.16
 
 - Graph outputs can now be accessed, but still a bit too primitive.

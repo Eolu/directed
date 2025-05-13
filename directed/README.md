@@ -232,6 +232,68 @@ fn main() {
 
 As stated before, multiple graphs can be created from that same registry, executed in any order.
 
+#### Get graph output
+
+Here is a simple example of how to access the outputs of a graph:
+
+```rust
+use directed::*;
+
+#[stage]
+fn TinyStage1() -> String {
+    String::from("This is the output!")
+}
+
+let mut registry = Registry::new();
+let node_1 = registry.register(TinyStage1::new());
+let graph = graph! {
+    nodes: [node_1],
+    connections: {}
+}
+.unwrap();
+
+graph.execute(&mut registry).unwrap();
+let mut outputs = graph.get_output(&mut registry).unwrap();
+assert_eq!(
+    outputs.take_unnamed::<String>(node_1).unwrap(),
+    String::from("This is the output!")
+)
+```
+
+See [GraphOutput::get], [GraphOutput::get_unnamed], [GraphOutput::take], [GraphOutput::take_unnamed]
+
+#### Inject input to top-level unconnected nodes
+
+Similar to the above, the "top" of the graph can also be ineracted with outside of the evaluatyion context
+
+```rust
+use directed::*;
+
+#[stage]
+fn TinyStage1(simple_input: String) -> String {
+    simple_input.replace("input", "output")
+}
+
+let mut registry = Registry::new();
+let node_1 = registry.register(TinyStage1::new());
+let graph = graph! {
+    nodes: [node_1],
+    connections: {}
+}
+.unwrap();
+
+// Note: Inputs have to be referred to by arg name.
+// TODO: Implement a few macros to make the above note into something more 
+//       elegant, and more consistent between inputs and outputs.
+graph.set_input(&mut registry, node_1, "simple_input", String::from("This is the simple input!")).unwrap();
+graph.execute(&mut registry).unwrap();
+let mut outputs = graph.get_output(&mut registry).unwrap();
+assert_eq!(
+    outputs.take_unnamed::<String>(node_1).unwrap(),
+    String::from("This is the simple output!")
+)
+```
+
 ## Features
 
 ### tokio
@@ -247,8 +309,6 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 
 ## WIP features/ideas/TODOs
 
-- High priority: Accept inputs for top-level nodes, return outputs from leaf nodes (important because it finally makes this crate a drop-in replacement for... anywhere you want a graph that you didn't use to have a graph)
-    - Partially implemented, outputs from leaf nodes can be accessed. The API is a bit raw still, and input injection is still missing
 - High priority: Handle when a node is unavailable from the registry in async execution (wait until it's available again)
     - There is in general more testing and work needed around this bullet. The registry serves as a node library that hands out nodes to be evaluated - and expects them to be returned when evaluation is done. Right now it will just give up if it attempts to concurrently execute the same node at the same time. Waiting is easy - but there are likely some situations where it CAN be valid to execute the same node at the same time. This will take a bit of plumbing in the proc macro.
 - Automatic validators to make sure correct input and output types are present if required (right now this would halt graph evaluation mid-way through and give an error, but there's no reason it can't do that before even starting evaluation)
@@ -257,6 +317,7 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 - A Graph + Registry could be combined to create a Node (with a baked stage). Right now we combine nodes with stages to make the registry, and registries with graphs. If we could instead combine STAGES with graphs, then output a valid registry full of nodes based on that combination, it would avoid the possibility of combining a registry with an invalid graph entirely. (or even, full graph sharding?)
 - An attribute that makes it serialize the cache and store between runs (this may be out of scope, but if so at least make sure the design doesn't prohibit someone from doing this).
 - A way to reset all registry state at once (probably only slightly harder to implement than it was to write this bullet point)
+- `get_output` and `inject_input` could probably be more elegant than they currently are
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)

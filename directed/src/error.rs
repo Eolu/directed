@@ -71,6 +71,18 @@ pub struct NodeTypeMismatchError {
 }
 
 #[derive(thiserror::Error, Debug)]
+pub enum SetInputError {
+    #[error(transparent)]
+    NodesNotFoundInRegistry(#[from] NodesNotFoundError),
+    #[error("{0:?} not found")]
+    InputNotFound(DataLabel),
+    #[error("{0:?} already connected to parent output {1:?}")]
+    InputAlreadyConnected(DataLabel, DataLabel),
+    #[error("{0:?} incorrect type")]
+    InputTypeMismatch(DataLabel)
+}
+
+#[derive(thiserror::Error, Debug)]
 #[error("Nodes with id `{0:?}` not found in registry")]
 pub struct NodesNotFoundError(Vec<NodeId>);
 

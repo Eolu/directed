@@ -3,14 +3,10 @@
 //! built from a single registry.
 // TODO: The above could be made safe and easy to do, and likely is worth it
 use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
-use std::collections::HashMap;
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use crate::{
-    EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace,
-    NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodesNotFoundError,
-    registry::Registry,
-    stage::{EvalStrategy, ReevaluationRule},
-    types::DataLabel,
+    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodesNotFoundError, SetInputError
 };
 
 #[macro_export]
@@ -271,6 +267,38 @@ impl Graph {
             }
         }
         Ok(results)
+    }
+
+    /// This will set the input of a particular node in the graph. Note that
+    /// the input must not be connected to the output of any other node.
+    pub fn set_input<T: Any + Send + Sync>(&self, registry: &mut Registry, node_id: NodeId, target_input: impl Into<DataLabel>, input: T) -> Result<Option<Arc<T>>, SetInputError> {
+        let data_label = target_input.into();
+        // Check to make sure input is unconnected
+        if let Some(&idx) = self.node_indices.get(&node_id) {
+            // TODO: Include parent name in error message
+            for (edge_idx, _) in self.dag.parents(idx).iter(&self.dag) {
+                if let Some(edge_info) = self.dag.edge_weight(edge_idx) {
+                    if edge_info.target_input == data_label {
+                        return Err(SetInputError::InputAlreadyConnected(data_label, edge_info.source_output.clone()));
+                    }
+                }
+            }
+        }
+        // self.dag.parents(self.node_indices.get(&node_id))
+        let node = registry.get_mut(node_id)
+            .ok_or_else(|| SetInputError::NodesNotFoundInRegistry((&[node_id] as &[usize]).into()))?;
+        if !node.input_names().any(|name| &name == &data_label) {
+            return Err(SetInputError::InputNotFound(data_label));
+        }
+        match node.inputs_mut().insert(data_label.clone(), (Arc::new(input), ReevaluationRule::Move)) {
+            Some((input, _)) => {
+                match input.downcast() {
+                    Ok(dc) => Ok(Some(dc)),
+                    Err(_) => Err(SetInputError::InputTypeMismatch(data_label))
+                }
+            },
+            None => Ok(None),
+        }
     }
 
     /// Execute a single node's stage asynchronously within the graph. This will recursively execute
