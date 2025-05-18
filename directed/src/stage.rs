@@ -20,7 +20,8 @@ pub enum RefType {
 /// Defines all the information about how a stage is handled.
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
 pub trait Stage: Clone {
-    /// Internal state only, no special rules apply to this
+    /// Internal state only, no special rules apply to this. This is stored
+    /// as a tuple of all state parameters in order.
     type State;
 
     /// Used for typechecking inputs.

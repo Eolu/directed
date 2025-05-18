@@ -72,7 +72,10 @@ impl Registry {
     }
 
     /// Add a node to the registry. This returns a unique identifier for that
-    /// node, which can be used to add it to a [crate::Graph]
+    /// node, which can be used to add it to a [crate::Graph].
+    /// 
+    /// [crate::stage::Stage::State] is taken as a tuple of all the state
+    /// parameters in the order they were defined.
     pub fn register_with_state<S: Stage + Send + 'static>(
         &mut self,
         stage: S,

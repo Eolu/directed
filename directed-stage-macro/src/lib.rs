@@ -55,9 +55,10 @@ struct StageConfig {
     is_lazy: (bool, Span),
     is_async: (bool, Span),
     cache_strategy: (CacheStrategy, Span),
+    // TODO: Why is this a String? Use ident directly
     outputs: Vec<(String, Type, Span)>,
     inputs: Vec<InputParam>,
-    state_type: proc_macro2::TokenStream,
+    states: Vec<(syn::Ident, Type, Span)>,
 }
 
 #[derive(Clone)]
@@ -89,27 +90,27 @@ struct InputParam {
 }
 
 #[derive(Clone)]
-struct Outputs(Punctuated<Output, Token![,]>);
+struct ParamList(Punctuated<ParamLike, Token![,]>);
 
-impl Parse for Outputs {
+impl Parse for ParamList {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Punctuated::parse_terminated(input).map(Self)
     }
 }
 
 #[derive(Clone)]
-struct Output {
+struct ParamLike {
     name: syn::Ident,
     ty: Type,
     span: Span,
 }
 
-impl Parse for Output {
+impl Parse for ParamLike {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let name: syn::Ident = input.parse()?;
         let _colon_token: Token![:] = input.parse()?;
         let ty: syn::Type = input.parse()?;
-        Ok(Output {
+        Ok(ParamLike {
             name,
             ty,
             span: Span::call_site(),
@@ -119,8 +120,8 @@ impl Parse for Output {
 
 enum StageArg {
     Flag(syn::Ident),
-    Output(Outputs),
-    State(syn::Type),
+    Output(ParamList),
+    State(ParamList),
 }
 
 impl Parse for StageArg {
@@ -177,7 +178,7 @@ impl StageConfig {
         let mut is_lazy = (false, Span::call_site());
         let mut cache_strategy = (CacheStrategy::None, Span::call_site());
         let mut outputs = Vec::new();
-        let mut state_type = quote_spanned!(Span::call_site()=>());
+        let mut states = Vec::new();
 
         // Process stage attribute arguments
         for arg in meta_args.args.iter() {
@@ -193,13 +194,15 @@ impl StageConfig {
                         ));
                     }
                 },
-                StageArg::Output(output_defs) => {
-                    for output in &output_defs.0 {
+                StageArg::Output(param_list) => {
+                    for output in &param_list.0 {
                         outputs.push((output.name.to_string(), output.ty.clone(), output.span));
                     }
                 }
-                StageArg::State(ty) => {
-                    state_type = quote_spanned!(ty.span()=>#ty);
+                StageArg::State(param_list) => {
+                    for state in &param_list.0 {
+                        states.push((state.name.clone(), state.ty.clone(), state.span));
+                    }
                 }
             }
         }
@@ -223,7 +226,7 @@ impl StageConfig {
             cache_strategy,
             outputs,
             inputs,
-            state_type,
+            states,
         })
     }
 
@@ -571,6 +574,19 @@ fn generate_output_handling(
             }
         }
     }).collect::<Vec<_>>();
+    let state_as_inputs = match config.states.len(){
+        0 => vec![],
+        1 => {
+            vec![quote_spanned!{config.states[0].2=> state}]
+        },
+        _ => config.states.iter()
+                .enumerate()
+                .map(|(i, state)| {
+                    let idx = syn::Index::from(i);
+                    quote_spanned!{state.2=> &mut state.#idx}
+                })
+                .collect::<Vec<_>>()
+    };
     // TODO: Get all output types annotated
     let first_output_type = config
         .outputs
@@ -584,16 +600,16 @@ fn generate_output_handling(
         }));
     let fn_call = match (config.is_multi_output(), config.is_async.0) {
         (true, true) => {
-            quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*).await }
+            quote_spanned! {Span::call_site()=> #original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*).await }
         }
         (true, false) => {
-            quote_spanned! {Span::call_site()=> #original_fn_renamed(state, #(#arg_names),*) }
+            quote_spanned! {Span::call_site()=> #original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*) }
         }
         (false, true) => {
-            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*).await) }
+            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*).await) }
         }
         (false, false) => {
-            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(state, #(#arg_names),*)) }
+            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*)) }
         }
     };
 
@@ -717,7 +733,7 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
 fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     let original_fn = &config.original_fn;
     let stage_name = &config.stage_name;
-    let state_type = &config.state_type;
+    let states = &config.states;
     let original_fn_renamed = &config.original_fn_renamed;
     let fn_attrs = &original_fn.attrs;
     let fn_vis = &original_fn.vis;
@@ -751,10 +767,24 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         }
     };
 
+    // Generate function inputs
+    let state_as_input = states.iter().map(|(name,ty,span)| quote_spanned! {*span=>#name: &mut #ty});
+    let state_as_type = match states.len() {
+        0 => quote::quote!{()},
+        1 => {
+            let (_,ty,span) = &states[0];
+            quote_spanned! {*span=>#ty}
+        },
+        _ => {
+            let types = states.iter().map(|(_,ty,span)| quote_spanned! {*span=>#ty});
+            quote::quote!{(#(#types),*,)}
+        }
+    };
+
     // Redefine the original function
     let new_fn_definition = quote::quote! {
         #(#fn_attrs)*
-        #async_status fn #original_fn_renamed(state: &mut #state_type, #original_args) #fn_return_type #original_body
+        #async_status fn #original_fn_renamed(#(#state_as_input),* #original_args) #fn_return_type #original_body
     };
 
     // Slap together eval logic
@@ -773,6 +803,44 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     } else {
         quote::quote!(#eval_logic)
     };
+
+    // TODO: Try and move away from type erasure by doing more concrete magic
+    // let input_struct_name = quote::format_ident!{"{stage_name}InputCache"};
+    // let output_struct_name = quote::format_ident!{"{stage_name}OutputCache"};
+
+    // let input_struct_fields = proc_macro2::TokenStream::from_iter(config.inputs.iter().map(|input| {
+    //     let input_ident = syn::Ident::new(&input.clean_name, input.span);
+    //     let mut input_ty = &input.type_;
+    //     quote_spanned!{input.span=>
+    //         #input_ident: Option<#input_ty>,
+    //     }
+    // }));
+    // let input_struct = quote_spanned!{Span::call_site()=> 
+    //     #fn_vis struct #input_struct_name {
+    //         #input_struct_fields
+    //     }
+    // };
+
+    // let output_struct = if config.outputs.len() == 1 && config.outputs[0].0 == "_" {
+    //     let (_, ty, span) = &config.outputs[0];
+    //     quote_spanned!{*span=> 
+    //         #fn_vis struct #output_struct_name(#ty);
+    //     }
+    // } else {
+    //     let output_struct_fields = proc_macro2::TokenStream::from_iter(config.outputs.iter().map(|(name, ty, span)| {
+    //         let output_ident = syn::Ident::new(name, *span);
+    //         let output_ty = &ty;
+    //         quote_spanned!{*span=>
+    //             #output_ident: Option<#output_ty>,
+    //         }
+    //     }));
+    //     quote_spanned!{Span::call_site()=> 
+    //         #fn_vis struct #output_struct_name {
+    //             #output_struct_fields
+    //         }
+    //     }
+    // };
+
 
     // The coup de grace
     quote_spanned! {Span::call_site()=>
@@ -799,7 +867,7 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
 
         #[cfg_attr(feature = "tokio", async_trait::async_trait)]
         impl directed::Stage for #stage_name {
-            type State = #state_type;
+            type State = #state_as_type;
 
             fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
                 &self.inputs

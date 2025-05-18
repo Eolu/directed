@@ -108,22 +108,16 @@ Stages can be annotated with `state`. This will indicate a type that can be used
 ```rust
 use directed::*;
 
-// Example state struct (any type can be used)
-#[derive(Default)]
-struct SomeState {
-    num_times_run: u32
-}
-
-// Use `state(TypeOfState)` to indicate the usage of state
-#[stage(state(SomeState))]
+// Use `state(name: TypeOfState)` to indicate the usage of state
+#[stage(state(num_times_run: u32, some_string: String))]
 fn StatefulStage() -> String {
     // this will automatically put an '&mut SomeState' in scope called 'state'
-    let result = if state.num_times_run == 0 {
+    let result = if *num_times_run == 0 {
         format!("I've never been run!")
     } else {
-        format!("I've been run {} times.", state.num_times_run)
+        format!("I've been run {} times.", num_times_run)
     };
-    state.num_times_run += 1;
+    *num_times_run += 1;
     result
 }
 ```
@@ -321,3 +315,4 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)
+- State names are usable within the stage function, but when inserting or accessing state you just get a tuple without name preservation (but with order preservation). This isn't quite ergonamic as I'd like, so ways to acces state by name should be included (likely by generating a struct with the names - maybe everything should generate within a module to prevent namespace pollution)

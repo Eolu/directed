@@ -498,7 +498,7 @@ mod tests {
     /// Test nodes with internal state
     #[test]
     fn node_with_state_test() {
-        #[stage(state((u8, u8)))]
+        #[stage(state(state: (u8, u8)))]
         fn StateStage() {
             assert_eq!(state.1, state.0 * 5);
             state.0 += 1;
@@ -731,20 +731,18 @@ mod async_tests {
         let (tx1, rx1) = unbounded_channel::<u8>();
         let (tx2, rx2) = unbounded_channel::<u8>();
 
-        #[stage(lazy, state((UnboundedSender<u8>, UnboundedReceiver<u8>)))]
+        #[stage(lazy, state(tx: UnboundedSender<u8>, rx: UnboundedReceiver<u8>))]
         async fn SlowStage1() -> i32 {
             println!("Running SlowStage1");
-            let (tx, rx) = state;
             tx.send(1).unwrap();
             assert_eq!(rx.recv().await.unwrap(), 2);
             COUNTER.fetch_add(1, Ordering::SeqCst);
             42
         }
 
-        #[stage(lazy, state((UnboundedSender<u8>, UnboundedReceiver<u8>)))]
+        #[stage(lazy, state(tx: UnboundedSender<u8>, rx: UnboundedReceiver<u8>))]
         async fn SlowStage2() -> String {
             println!("Running SlowStage2");
-            let (tx, rx) = state;
             assert_eq!(rx.recv().await.unwrap(), 1);
             tx.send(2).unwrap();
             COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -762,10 +760,6 @@ mod async_tests {
         let stage2 = registry.register_with_state(SlowStage2::new(), (tx2, rx1));
         let combine = registry.register(CombineStage::new());
 
-        println!("Node {stage1} is SlowStage1");
-        println!("Node {stage2} is SlowStage2");
-        println!("Node {combine} is CombineStage");
-
         let graph = graph! {
             nodes: [stage1, stage2, combine],
             connections: {
@@ -779,13 +773,12 @@ mod async_tests {
         // Reset counter
         COUNTER.store(0, Ordering::SeqCst);
 
-        // Time the execution
         graph
             .execute_async(tokio::sync::Mutex::new(registry))
             .await
             .unwrap();
 
-        // Both slow stages should have been executed
+        // Both stages should have been executed
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
     }
 }
