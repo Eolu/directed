@@ -315,4 +315,4 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)
-- State names are usable within the stage function, but when inserting or accessing state you just get a tuple without name preservation (but with order preservation). This isn't quite ergonamic as I'd like, so ways to acces state by name should be included (likely by generating a struct with the names - maybe everything should generate within a module to prevent namespace pollution)
+- State names are usable within the stage function, but when inserting or accessing state you just get a tuple without name preservation (but with order preservation). This isn't quite ergonamic as I'd like, so ways to acces state by name should be included (likely by generating a struct with the names)

@@ -23,6 +23,18 @@ pub trait Stage: Clone {
     /// Internal state only, no special rules apply to this. This is stored
     /// as a tuple of all state parameters in order.
     type State;
+    /// TODO: Contender to replace 'State' with actual named params
+    type StateStruct;
+    /// TODO: The input of this stage
+    #[cfg(feature="tokio")]
+    type Input: Send + Sync;
+    #[cfg(not(feature="tokio"))]
+    type Input;
+    /// TODO: The output of this stage
+    #[cfg(feature="tokio")]
+    type Output: Send + Sync;
+    #[cfg(not(feature="tokio"))]
+    type Output;
 
     /// Used for typechecking inputs.
     fn inputs(&self) -> &HashMap<DataLabel, (TypeId, RefType)>;
@@ -33,16 +45,16 @@ pub trait Stage: Clone {
         &self,
         state: &mut Self::State,
         inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-        cache: &mut HashMap<u64, Vec<crate::Cached>>,
-    ) -> Result<NodeOutput, InjectionError>;
+        cache: &mut HashMap<u64, Vec<crate::Cached<Self::Output>>>,
+    ) -> Result<Self::Output, InjectionError>;
     /// async version of evaluate
     #[cfg(feature = "tokio")]
     async fn evaluate_async(
         &self,
         state: &mut Self::State,
         inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-        cache: &mut HashMap<u64, Vec<crate::Cached>>,
-    ) -> Result<NodeOutput, InjectionError>;
+        cache: &mut HashMap<u64, Vec<crate::Cached<Self::Output>>>,
+    ) -> Result<Self::Output, InjectionError>;
 
     fn eval_strategy(&self) -> EvalStrategy {
         EvalStrategy::Lazy

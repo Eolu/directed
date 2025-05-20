@@ -6,10 +6,11 @@ use crate::{NodeId, node::UNNAMED_OUTPUT_NAME};
 #[macro_export]
 macro_rules! output {
     ($($name:ident $(: $val:expr)?),*) => {
-        directed::NodeOutput::new()
+        StageOutputType {
         $(
-            .add(stringify!($name), output!(@internal $name $(, $val)?))
+            $name: output!(@internal $name $(, $val)?),
         )*
+        }
     };
     (@internal $name:ident, $val:expr) => { $val };
     (@internal $name:ident) => { $name };

@@ -64,6 +64,7 @@ impl Registry {
     pub fn register<S: Stage + Send + 'static>(&mut self, stage: S) -> NodeId
     where
         S::State: Default + Send,
+        Node<S>: AnyNode
     {
         let next = self.0.len();
         self.0
@@ -83,6 +84,7 @@ impl Registry {
     ) -> NodeId
     where
         S::State: Send,
+        Node<S>: AnyNode
     {
         let next = self.0.len();
         self.0.push(Some(Box::new(Node::new(stage, state))));

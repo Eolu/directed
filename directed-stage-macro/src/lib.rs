@@ -1,43 +1,17 @@
+use std::process::Output;
+
 use proc_macro::TokenStream;
 use proc_macro_error::proc_macro_error;
 use proc_macro2::Span;
 use quote::quote_spanned;
 use syn::{
-    FnArg, ItemFn, Pat, ReturnType, Token, Type,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-    punctuated::Punctuated,
-    spanned::Spanned,
+    parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated, spanned::Spanned, FnArg, ItemFn, Pat, ReturnType, Token, Type, TypeGenerics
 };
 
 // TODO: `inject_input` implementation is unruly and violates DRY in silly ways. It could be simplified a lot.
 
 /// A macro that wraps a function with the standardized interface:
-/// fn fn_name(&mut DataMap, &DataMap) -> Result<DataMap>
-///
-/// Example usage:
-///
-/// ```ignore
-/// use crate::*;
-///
-/// #[stage(lazy, transparent)]
-/// fn add_numbers(a: i32, b: i32) -> i32 {
-///     a + b
-/// }
-/// ```
-///
-/// Multiple outputs are also supported with this syntax:
-/// #[stage(out(arg1_name: String, arg2_name: Vec<u8>))]
-/// fn output_things() -> directed::NodeOutput {
-///    let some_string = String::from("Hello Graph!");
-///    let some_vec = vec![1, 2, 3, 4, 5];
-///
-///    // This builds an output type
-///    directed::output!{
-///        arg1_name: some_string,
-///        arg2_name: some_vec
-///    }
-/// }
+/// TODO: More in-depth docs here
 #[proc_macro_attribute]
 #[proc_macro_error]
 pub fn stage(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -56,7 +30,7 @@ struct StageConfig {
     is_async: (bool, Span),
     cache_strategy: (CacheStrategy, Span),
     // TODO: Why is this a String? Use ident directly
-    outputs: Vec<(String, Type, Span)>,
+    outputs: OutputParams,
     inputs: Vec<InputParam>,
     states: Vec<(syn::Ident, Type, Span)>,
 }
@@ -81,12 +55,34 @@ impl RefType {
 }
 
 #[derive(Clone)]
+enum OutputParams {
+    Explicit(Vec<OutputParam>),
+    Implicit(Type, Span)
+}
+
+#[derive(Clone)]
+struct OutputParam {
+    name: syn::Ident,
+    ty: Type,
+    span: Span
+}
+
+#[derive(Clone)]
 struct InputParam {
     name: syn::Ident,
-    type_: Type,
+    ty: Type,
     ref_type: RefType,
     clean_name: String,
     span: Span,
+}
+
+impl InputParam {
+    pub fn unwrapped_type(&self) -> &Type {
+        match &self.ty {
+            Type::Reference(type_reference) => &*type_reference.elem,
+            ty => &ty,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -177,7 +173,13 @@ impl StageConfig {
         );
         let mut is_lazy = (false, Span::call_site());
         let mut cache_strategy = (CacheStrategy::None, Span::call_site());
-        let mut outputs = Vec::new();
+        let mut outputs = match &input_fn.sig.output {
+            ReturnType::Default => OutputParams::Implicit(Type::Tuple(syn::TypeTuple {
+                paren_token: syn::token::Paren::default(),
+                elems: Punctuated::new(),
+            }), Span::call_site()),
+            ReturnType::Type(_, ty) => OutputParams::Implicit(*ty.clone(), ty.span()),
+        };
         let mut states = Vec::new();
 
         // Process stage attribute arguments
@@ -195,8 +197,14 @@ impl StageConfig {
                     }
                 },
                 StageArg::Output(param_list) => {
+                    if matches!(outputs, OutputParams::Implicit(..)) {
+                        outputs = OutputParams::Explicit(Vec::new());
+                    }
                     for output in &param_list.0 {
-                        outputs.push((output.name.to_string(), output.ty.clone(), output.span));
+                        match &mut outputs {
+                            OutputParams::Explicit(output_params) => output_params.push(OutputParam { name: output.name.clone(), ty: output.ty.clone(), span: output.span }),
+                            _ => unreachable!(),
+                        }
                     }
                 }
                 StageArg::State(param_list) => {
@@ -209,11 +217,6 @@ impl StageConfig {
 
         // Process function arguments to create input definitions
         let inputs = Self::extract_input_params(&input_fn.sig.inputs)?;
-
-        // If no outputs specified, process return type
-        if outputs.is_empty() {
-            outputs = Self::extract_outputs_from_return_type(&input_fn.sig.output)?;
-        }
 
         let original_fn_renamed = quote::format_ident!("original_fn_{}", stage_name);
 
@@ -259,7 +262,7 @@ impl StageConfig {
 
                     result.push(InputParam {
                         name: arg_name.clone(),
-                        type_: *arg_type.clone(),
+                        ty: *arg_type.clone(),
                         ref_type,
                         clean_name,
                         span: arg.span(),
@@ -270,51 +273,6 @@ impl StageConfig {
 
         Ok(result)
     }
-
-    fn extract_outputs_from_return_type(
-        return_type: &ReturnType,
-    ) -> syn::Result<Vec<(String, Type, Span)>> {
-        match return_type {
-            ReturnType::Type(_, ty) => {
-                // Check if the return type is NodeOutput
-                if let Type::Path(type_path) = &**ty {
-                    if let Some(segment) = type_path.path.segments.last() {
-                        // TODO: This is a hack, just properly check if any out attributes exist
-                        if segment.ident == "NodeOutput" {
-                            // NodeOutput will be handled elsewhere
-                            return Ok(Vec::new());
-                        }
-                    }
-                }
-
-                // Single output with default name
-                Ok(vec![("_".to_string(), (**ty).clone(), ty.span())])
-            }
-            ReturnType::Default => {
-                // Return type is (), use default name
-                Ok(vec![(
-                    "_".to_string(),
-                    Type::Tuple(syn::TypeTuple {
-                        paren_token: syn::token::Paren::default(),
-                        elems: Punctuated::new(),
-                    }),
-                    Span::mixed_site(),
-                )])
-            }
-        }
-    }
-
-    fn is_multi_output(&self) -> bool {
-        if let ReturnType::Type(_, ty) = &self.original_fn.sig.output {
-            if let Type::Path(type_path) = &**ty {
-                if let Some(segment) = type_path.path.segments.last() {
-                    // TODO: This is a hack, just check if any out attributes exist
-                    return segment.ident == "NodeOutput";
-                }
-            }
-        }
-        false
-    }
 }
 
 /// This associates the names of function parameters with the TypeId of their type.
@@ -323,7 +281,7 @@ impl StageConfig {
 fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
     inputs.iter().map(|input| {
         let arg_name = &input.clean_name;
-        let arg_type = &input.type_;
+        let arg_type = &input.ty;
         let ref_type = input.ref_type.quoted();
         let span = input.span.clone();
         quote_spanned! {span=>
@@ -333,23 +291,35 @@ fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::Token
 }
 
 /// This associates the names of function outputs with the TypeId of their type.
-/// When a function returns a NodeOutput type, this will associate meaningful
+/// When a function returns named outputs, this will associate meaningful
 /// names to each output. When a function returns any other type, this will
 /// simply associate that one type with the name '_'.
 ///
 /// Used to build and validate I/O-based connections
 fn generate_output_registrations(
-    outputs: &[(String, Type, Span)],
+    outputs: &OutputParams,
 ) -> Vec<proc_macro2::TokenStream> {
-    outputs
-        .iter()
-        .map(|(name, ty, _span)| {
-            quote_spanned! {Span::call_site()=>
+    // TODO: DataLabel stuff here should be subsumed by better arch
+    match outputs {
+        OutputParams::Explicit(outputs) => {
+            // TODO: I don't even think this will work anymore with the struct!!
+            outputs.iter().map(|output| {
+                let name = output.name.to_string();
+                let ty = &output.ty;
+                let span = &output.span;
+                quote_spanned! {*span=>
+                    // TODO: Fix the fact it can't find outputs here!
+                    outputs.insert(directed::DataLabel::new_with_type_name(#name, stringify!(#ty)), std::any::TypeId::of::<#ty>());
+                }
+            }).collect()
+        },
+        OutputParams::Implicit(ty, span) => {
+            vec![quote_spanned! {*span=>
                 // TODO: Fix the fact it can't find outputs here!
-                outputs.insert(directed::DataLabel::new_with_type_name(#name, stringify!(#ty)), std::any::TypeId::of::<#ty>());
-            }
-        })
-        .collect()
+                outputs.insert(directed::DataLabel::new_with_type_name("_", stringify!(#ty)), std::any::TypeId::of::<#ty>());
+            }]
+        },
+    }
 }
 
 /// Get a type, squash the &
@@ -370,7 +340,7 @@ fn generate_extraction_code(
 ) -> Vec<proc_macro2::TokenStream> {
     inputs.iter().map(|input| {
         let arg_name = &input.name;
-        let arg_type = true_type(&input.type_);
+        let arg_type = true_type(&input.ty);
         let clean_arg_name = &input.clean_name;
         let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
         let input_span = input.span.clone();
@@ -427,7 +397,7 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
     // Build match arms from inputs
     for input in inputs.iter() {
         let clean_arg_name = &input.clean_name;
-        let arg_type = true_type(&input.type_);
+        let arg_type = true_type(&input.ty);
         let span = input.span.clone();
 
         inject_opaque_out_code.push(quote_spanned! {span=>
@@ -538,12 +508,10 @@ fn input_injection(inputs: &[InputParam]) -> proc_macro2::TokenStream {
     }
 }
 
-/// Functions that return a NodeOutput are used as-is, where as functions
-/// that return anything else are wrapped in a simple MultOutput (simple
-/// in that it contains only 1 output named '_')
 fn generate_output_handling(
     config: &StageConfig,
     cache_strategy: (CacheStrategy, Span),
+    output_struct_name: syn::Ident,
 ) -> proc_macro2::TokenStream {
     // TODO: Right now cache_last and cache_all are handled more differently than necessary
     let original_fn_renamed = &config.original_fn_renamed;
@@ -560,7 +528,7 @@ fn generate_output_handling(
     let arg_types = config
         .inputs
         .iter()
-        .map(|input| &input.type_)
+        .map(|input| &input.ty)
         .collect::<Vec<_>>();
     let downcast_ref_calls = clean_names.iter().zip(arg_types.iter()).zip(arg_names.iter()).map(|((clean_name, arg_type), arg_name)| {
         let name_span = arg_name.span();
@@ -588,30 +556,28 @@ fn generate_output_handling(
                 .collect::<Vec<_>>()
     };
     // TODO: Get all output types annotated
-    let first_output_type = config
-        .outputs
-        .iter()
-        .map(|(_, t, _)| t)
-        .cloned()
-        .next()
-        .unwrap_or(Type::Tuple(syn::TypeTuple {
-            paren_token: syn::token::Paren::default(),
-            elems: Punctuated::new(),
-        }));
-    let fn_call = match (config.is_multi_output(), config.is_async.0) {
-        (true, true) => {
-            quote_spanned! {Span::call_site()=> #original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*).await }
-        }
-        (true, false) => {
-            quote_spanned! {Span::call_site()=> #original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*) }
-        }
-        (false, true) => {
-            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*).await) }
-        }
-        (false, false) => {
-            quote_spanned! {Span::call_site()=> directed::NodeOutput::new_simple(#original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*)) }
-        }
+    // let first_output_type = config
+    //     .outputs
+    //     .iter()
+    //     .map(|(_, t, _)| t)
+    //     .cloned()
+    //     .next()
+    //     .unwrap_or(Type::Tuple(syn::TypeTuple {
+    //         paren_token: syn::token::Paren::default(),
+    //         elems: Punctuated::new(),
+    //     }));
+    let await_call = if config.is_async.0 { quote::quote!{.await} } else { quote::quote!{} };
+    let fn_call = match &config.outputs {
+        OutputParams::Explicit(_) => {
+            quote_spanned! {Span::mixed_site()=> #original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*) #await_call }
+        },
+        OutputParams::Implicit(_, span) => quote_spanned! {*span=> #output_struct_name(#original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*) #await_call) },
     };
+    // let fn_call = if config.outputs.len() == 0 {
+    //     quote_spanned! {Span::call_site()=> #output_struct_name(#original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*) #await_call)}
+    // } else {
+    //     quote_spanned! {Span::call_site()=> #original_fn_renamed(#(#state_as_inputs),* #(#arg_names),*) #await_call }
+    // };
 
     if cache_strategy.0 == CacheStrategy::All {
         quote_spanned! {cache_strategy.1=>
@@ -642,37 +608,18 @@ fn generate_output_handling(
 
             if let Some(cached) = cached {
                 // Just use cached values
-                if cached.outputs.len() == 1 && cached.outputs.get(&"_".into()).is_some() {
-                    // TODO: Don't panic
-                    Ok(NodeOutput::dyn_new_simple(cached.outputs.get(&"_".into()).unwrap().clone()))
-                } else {
-                    let mut result = NodeOutput::new();
-                    for (out_name, out_val) in cached.outputs.iter() {
-                        result = result.add(&out_name.name.to_owned().expect("Expected a non-blank data label"), out_val.clone());
-                    }
-                    Ok(result)
-                }
+                Ok(cached.outputs.clone())
             } else {
                 // Call and store result in cache
                 let result = #fn_call;
                 let cache_entry = {
                     #[allow(unused_mut)]
-                    let mut cached = directed::Cached {
+                    let mut cached = directed::Cached::<#output_struct_name> {
                         inputs: std::collections::HashMap::new(),
-                        outputs: std::collections::HashMap::new(),
+                        outputs: result.clone(),
                     };
                     for (in_name, in_val) in inputs.iter() {
                         cached.inputs.insert(in_name.clone(), in_val.0.clone());
-                    }
-                    match &result {
-                        NodeOutput::Standard(val) => {
-                            cached.outputs.insert(directed::DataLabel::new_with_type_name("_", stringify!(#first_output_type)), val.clone());
-                        },
-                        NodeOutput::Named(vals) => {
-                            for (key, val) in vals {
-                                cached.outputs.insert(key.clone(), val.clone());
-                            }
-                        },
                     }
                     cached
                 };
@@ -729,8 +676,34 @@ fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
     output
 }
 
+/// Modify the function to give it access to concrete types
+fn insert_local_types(config: &mut StageConfig, output_type: proc_macro2::TokenStream){
+    let original_fn = &mut config.original_fn;
+    let original_body = &mut original_fn.block;
+
+    original_body.stmts.insert(0, syn::Stmt::Item(syn::Item::Type(syn::ItemType {
+        attrs: Vec::new(),
+        vis: syn::Visibility::Inherited,
+        type_token: Token![type](Span::call_site()),
+        ident: syn::Ident::new("StageOutputType", Span::call_site()),
+        generics:  syn::Generics::default(),
+        eq_token: Token![=](Span::call_site()),
+        ty: Box::new(syn::Type::Verbatim(output_type)),
+        semi_token: Token![;](Span::call_site()),
+    })));
+}
+
 /// The core trait that defines a stage - the culmination of this macro
-fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
+fn generate_stage_impl(mut config: StageConfig) -> proc_macro2::TokenStream {
+
+    // Generate names for types
+    let input_struct_name = quote::format_ident!{"{}InputCache", &config.stage_name};
+    let output_struct_name = quote::format_ident!{"{}OutputCache", &config.stage_name};
+    let state_struct_name = quote::format_ident!{"{}State", &config.stage_name};
+
+    // Modify stage before starting the generation
+    insert_local_types(&mut config, quote::quote!{#output_struct_name});
+
     let original_fn = &config.original_fn;
     let stage_name = &config.stage_name;
     let states = &config.states;
@@ -742,13 +715,70 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     let original_body = &original_fn.block;
     let async_status = &original_fn.sig.asyncness;
 
+    // Determine if clone
+    let derive_clone = if config.cache_strategy.0 == CacheStrategy::None {
+        quote::quote!{}
+    } else {
+        quote_spanned!{config.cache_strategy.1=>#[derive(Clone)]}
+    };
+
+    // Create useful structs
+    // TODO: Try and move away from type erasure by doing more concrete magic
+    let input_struct_fields = proc_macro2::TokenStream::from_iter(config.inputs.iter().map(|input| {
+        let input_ident = syn::Ident::new(&input.clean_name, input.span);
+        let input_ty = input.unwrapped_type();
+        quote_spanned!{input.span=>
+            #input_ident: Option<std::sync::Arc<#input_ty>>,
+        }
+    }));
+    let input_struct = quote_spanned!{Span::call_site()=>
+        #derive_clone
+        #fn_vis struct #input_struct_name {
+            #input_struct_fields
+        }
+    };
+
+    let output_struct = match &config.outputs {
+        OutputParams::Explicit(output_params) => {
+            let fields = output_params.iter().map(|param| {
+                let name = &param.name;
+                let ty = &param.ty;
+                let span = param.span;
+
+                quote_spanned! {span=> #name: #ty}
+            });
+            quote_spanned! {Span::mixed_site()=>
+                #derive_clone
+                #fn_vis struct #output_struct_name {
+                    #(#fields),*
+                }
+            }
+        },
+        OutputParams::Implicit(ty, span) => quote_spanned! {ty.span()=>
+            #derive_clone
+            #fn_vis struct #output_struct_name(#ty);
+        },
+    };
+
+    let state_struct_fields = proc_macro2::TokenStream::from_iter(config.states.iter().map(|(state_ident, ty, span)| {
+        let state_ty = &ty;
+        quote_spanned!{*span=>
+            #state_ident: #state_ty,
+        }
+    }));
+    let state_struct = quote_spanned!{Span::call_site()=> 
+        #fn_vis struct #state_struct_name {
+            #state_struct_fields
+        }
+    };
+
     // Generate code sections
     let input_registrations = generate_input_registrations(&config.inputs);
     let output_registrations = generate_output_registrations(&config.outputs);
     let extraction_code = generate_extraction_code(&config.inputs, config.cache_strategy);
     let injection_code = input_injection(&config.inputs);
     let prepare_input_types_code = prepare_input_types(&config);
-    let output_handling = generate_output_handling(&config, config.cache_strategy);
+    let output_handling = generate_output_handling(&config, config.cache_strategy, output_struct_name.clone());
 
     // Determine evaluation strategy and reevaluation rule
     let eval_strategy = if config.is_lazy.0 {
@@ -782,9 +812,13 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
     };
 
     // Redefine the original function
+    let return_type = match &config.outputs {
+        OutputParams::Explicit(_) => quote::quote!{-> #output_struct_name},
+        OutputParams::Implicit(_, span) => quote::quote_spanned!{*span => #fn_return_type},
+    };
     let new_fn_definition = quote::quote! {
         #(#fn_attrs)*
-        #async_status fn #original_fn_renamed(#(#state_as_input),* #original_args) #fn_return_type #original_body
+        #async_status fn #original_fn_renamed(#(#state_as_input),* #original_args) #return_type #original_body
     };
 
     // Slap together eval logic
@@ -804,54 +838,18 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         quote::quote!(#eval_logic)
     };
 
-    // TODO: Try and move away from type erasure by doing more concrete magic
-    // let input_struct_name = quote::format_ident!{"{stage_name}InputCache"};
-    // let output_struct_name = quote::format_ident!{"{stage_name}OutputCache"};
-
-    // let input_struct_fields = proc_macro2::TokenStream::from_iter(config.inputs.iter().map(|input| {
-    //     let input_ident = syn::Ident::new(&input.clean_name, input.span);
-    //     let mut input_ty = &input.type_;
-    //     quote_spanned!{input.span=>
-    //         #input_ident: Option<#input_ty>,
-    //     }
-    // }));
-    // let input_struct = quote_spanned!{Span::call_site()=> 
-    //     #fn_vis struct #input_struct_name {
-    //         #input_struct_fields
-    //     }
-    // };
-
-    // let output_struct = if config.outputs.len() == 1 && config.outputs[0].0 == "_" {
-    //     let (_, ty, span) = &config.outputs[0];
-    //     quote_spanned!{*span=> 
-    //         #fn_vis struct #output_struct_name(#ty);
-    //     }
-    // } else {
-    //     let output_struct_fields = proc_macro2::TokenStream::from_iter(config.outputs.iter().map(|(name, ty, span)| {
-    //         let output_ident = syn::Ident::new(name, *span);
-    //         let output_ty = &ty;
-    //         quote_spanned!{*span=>
-    //             #output_ident: Option<#output_ty>,
-    //         }
-    //     }));
-    //     quote_spanned!{Span::call_site()=> 
-    //         #fn_vis struct #output_struct_name {
-    //             #output_struct_fields
-    //         }
-    //     }
-    // };
-
-
     // The coup de grace
     quote_spanned! {Span::call_site()=>
         // Create a struct implementing the Stage trait
         #[derive(Clone)]
         #fn_vis struct #stage_name {
+            // TODO: These will no longer be necessary with the new structure
             inputs: std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)>,
             outputs: std::collections::HashMap<directed::DataLabel, std::any::TypeId>,
         }
 
         impl #stage_name {
+            // TODO: This will no longer be necessary with the new structure (it's a ZST!)
             pub fn new() -> Self {
                 let mut inputs = std::collections::HashMap::new();
                 let mut outputs = std::collections::HashMap::new();
@@ -865,9 +863,17 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
         #[allow(non_snake_case)]
         #new_fn_definition
 
+        // Structs to contain various caches
+        #input_struct
+        #output_struct
+        #state_struct
+
         #[cfg_attr(feature = "tokio", async_trait::async_trait)]
         impl directed::Stage for #stage_name {
             type State = #state_as_type;
+            type StateStruct = #state_struct_name;
+            type Input = #input_struct_name;
+            type Output = #output_struct_name;
 
             fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
                 &self.inputs
@@ -881,8 +887,8 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 &self,
                 state: &mut Self::State,
                 inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>,
-                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached>>
-            ) -> Result<directed::NodeOutput, directed::InjectionError> {
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<#output_struct_name>>>
+            ) -> Result<Self::Output, directed::InjectionError> {
                 #sync_eval_logic
             }
 
@@ -891,8 +897,8 @@ fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
                 &self,
                 state: &mut Self::State,
                 inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>,
-                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached>>
-            ) -> Result<directed::NodeOutput, directed::InjectionError> {
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<#output_struct_name>>>
+            ) -> Result<Self::Output, directed::InjectionError> {
                 #async_eval_logic
             }
 

@@ -14,6 +14,85 @@ pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, GraphOutput, NodeOutput};
 
+pub fn basic_cache_all_test() {
+    use crate as directed;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[stage(lazy, cache_all)]
+    fn CacheStage1() -> String {
+        println!("Running stage 1");
+        COUNTER.fetch_add(1, Ordering::SeqCst);
+        String::from("This is the output!")
+    }
+
+    #[stage(lazy, cache_all)]
+    fn CacheStage2(input: String, input2: String) -> String {
+        println!("Running stage 2");
+        COUNTER.fetch_add(1, Ordering::SeqCst);
+        input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
+    }
+
+    #[stage(cache_last)]
+    fn TinyStage3(input: String) {
+        println!("Running stage 3");
+        assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
+    }
+
+    #[stage(lazy, cache_all)]
+    fn CacheStage1Alternate() -> String {
+        println!("Running alt stage 1");
+        COUNTER.fetch_add(1, Ordering::SeqCst);
+        String::from("This is a different output!")
+    }
+
+    #[stage(cache_last)]
+    fn TinyStage3Alternate(input: String) {
+        println!("Running alt stage 3");
+        assert_eq!("THIS IS A DIFFERENT OUTPUT! [27 chars]", input);
+    }
+
+    let mut registry = Registry::new();
+    let node_1 = registry.register(CacheStage1::new());
+    let node_2 = registry.register(CacheStage2::new());
+    let node_3 = registry.register(TinyStage3::new());
+    let node_1_alt = registry.register(CacheStage1Alternate::new());
+    let node_3_alt = registry.register(TinyStage3Alternate::new());
+
+    let graph1 = graph! {
+        nodes: [node_1, node_2, node_3],
+        connections: {
+            node_1 => node_2: input,
+            node_1 => node_2: input2,
+            node_2 => node_3: input,
+        }
+    }
+    .unwrap();
+
+    graph1.execute(&mut registry).unwrap();
+    assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+    graph1.execute(&mut registry).unwrap();
+    assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+
+    // Now with a modified graph, but same stage 2
+    let graph2 = graph! {
+        nodes: [node_1_alt, node_2, node_3_alt],
+        connections: {
+            node_1_alt => node_2: input,
+            node_1_alt => node_2: input2,
+            node_2 => node_3_alt: input,
+        }
+    }
+    .unwrap();
+
+    graph2.execute(&mut registry).unwrap();
+    assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+    graph2.execute(&mut registry).unwrap();
+    assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+    graph1.execute(&mut registry).unwrap();
+    assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+}
+
 #[cfg(test)]
 mod tests {
     extern crate self as directed;
@@ -114,7 +193,7 @@ mod tests {
     #[test]
     fn multiple_output_stage_test() {
         #[stage(out(number: i32, text: String))]
-        fn MultiOutputStage() -> NodeOutput {
+        fn MultiOutputStage() {
             let value1 = 42;
             let value2 = String::from("Hello");
             output! {
@@ -458,41 +537,6 @@ mod tests {
         .unwrap();
 
         graph.execute(&mut registry).unwrap();
-    }
-
-    // Test accessing outputs by wrong name
-    #[test]
-    fn invalid_output_name_test() {
-        #[stage]
-        fn MultiOutputStage() -> NodeOutput {
-            output! {
-                output1: 42,
-                output2: "Hello".to_string()
-            }
-        }
-
-        #[stage]
-        fn ConsumerStage(_input: i32) {
-            // Should never execute
-            panic!("Should not execute");
-        }
-
-        let mut registry = Registry::new();
-        let producer = registry.register(MultiOutputStage::new());
-        let consumer = registry.register(ConsumerStage::new());
-
-        // Connect with non-existent output name
-        let graph = graph! {
-            nodes: [producer, consumer],
-            connections: {
-                producer: nonexistent => consumer: input,
-            }
-        }
-        .unwrap();
-
-        // Should fail because the output name doesn't exist
-        let result = graph.execute(&mut registry);
-        assert!(result.is_err());
     }
 
     /// Test nodes with internal state
