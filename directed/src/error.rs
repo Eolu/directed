@@ -1,5 +1,5 @@
 //! Errors and the graph trace system
-use crate::{AnyNode, DataLabel, Graph, NodeId, Registry};
+use crate::{DataLabel, Graph, NodeId, Registry};
 use std::{
     borrow::Cow,
     fmt::{self, Display, Formatter, Write},
@@ -188,7 +188,7 @@ pub struct ConnectionInfo {
 // Extension to Registry to allow access to nodes by ID
 impl Registry {
     /// Gets a node by its ID.
-    pub fn get_node_by_id(&self, id: NodeId) -> Option<&Box<dyn AnyNode>> {
+    pub fn get_node_by_id(&self, id: NodeId) -> Option<&Box<dyn std::any::Any>> {
         self.0.get(id).map(|node| node.as_ref()).flatten()
     }
 }

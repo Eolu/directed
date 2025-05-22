@@ -8,7 +8,7 @@ use std::{
 use crate::{
     InjectionError, RefType,
     stage::{EvalStrategy, ReevaluationRule, Stage},
-    types::{DataLabel, NodeOutput},
+    types::DataLabel,
 };
 
 /// Used for single-output functions
@@ -23,17 +23,18 @@ pub struct Node<S: Stage> {
     pub(super) stage: S,
     // Arbitrary state, by default will be ()
     pub(super) state: S::State,
-    pub(super) inputs: HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
+    pub(super) inputs: Option<S::Input>,
     pub(super) outputs: Option<S::Output>,
-    pub(super) cache: HashMap<u64, Vec<Cached<S::Output>>>,
+    /// TODO: Simplify this!
+    pub(super) cache: HashMap<u64, Vec<Cached<S::Input, S::Output>>>,
     pub(super) input_changed: bool,
 }
 
 /// This represents a cached input/output pair
 /// TODO: handle state as well
 #[derive(Debug, Clone)]
-pub struct Cached<O> {
-    pub inputs: HashMap<DataLabel, Arc<dyn Any + Send + Sync>>,
+pub struct Cached<I, O> {
+    pub inputs: I,
     pub outputs: O,
 }
 
@@ -57,157 +58,33 @@ impl<S: Stage> Node<S> {
         Self {
             stage,
             state: initial_state,
-            inputs: HashMap::new(),
+            inputs: None,
             outputs: None,
             cache: HashMap::new(),
             input_changed: true,
         }
     }
-}
 
-/// This is used to type-erase a node. It's public because the macro needs to
-/// use this, but there should be no reason anyone should manually implement
-/// this.
-/// 
-/// TODO: Squash this trait entirely! It's the final faux pas!
-#[cfg_attr(feature = "tokio", async_trait::async_trait)]
-pub trait AnyNode: Any + Send + 'static {
-    /// Upcast to `dyn Any` to get its more-specific downcast capabilities
-    fn into_any(self: Box<Self>) -> Box<dyn Any>;
-    /// Primarily used for internal checks
-    fn as_any(&self) -> &dyn Any;
-    /// USed to get mutable access to state
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-    /// Evaluates the node. Returns a map of prior outputs
-    fn eval(&mut self) -> Result<Option<Box<dyn Any>>, InjectionError>;
+    /// Evaluates the node, returning any prior outputs
+    fn eval(&mut self) -> Result<Option<S::Output>, InjectionError> {
+        if let Some(inputs) = &mut self.inputs {
+            Ok(self.outputs.replace(self
+                .stage
+                .evaluate(&mut self.state, inputs, &mut self.cache)?))
+        } else {
+            Err(InjectionError::InputNotFound(DataLabel::new_blank()))
+        }
+    }
+
+    /// Evaluates the node asynchronously, returning any prior outputs
     #[cfg(feature = "tokio")]
-    async fn eval_async(
-        &mut self,
-    ) -> Result<Option<Box<dyn Any + Send + Sync>>, InjectionError>;
-    fn eval_strategy(&self) -> EvalStrategy;
-    fn reeval_rule(&self) -> ReevaluationRule;
-    /// This a a core part of the plumbing of this crate - take the outputs of
-    /// a parent node and use them to set the inputs of a child node.
-    fn flow_data(
-        &mut self,
-        child: &mut Box<dyn AnyNode>,
-        output: DataLabel,
-        input: DataLabel,
-    ) -> Result<(), InjectionError>;
-    /// Used to support `[Self::flow_data]`
-    fn inputs_mut(
-        &mut self,
-    ) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>;
-    /// Used to support `[Self::flow_data]`
-    fn outputs_mut(&mut self) -> &mut (dyn Any + Send + Sync);
-    /// Look of the reftype of a particular input
-    fn input_reftype(&self, name: &DataLabel) -> Option<RefType>;
-    /// Used to indicate that an input has been modified from a previous run.
-    fn set_input_changed(&mut self, val: bool);
-    /// See `[Self::set_input_changed]`
-    fn input_changed(&self) -> bool;
-    fn input_names(
-        &self,
-    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>>;
-    fn output_names(
-        &self,
-    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>>;
-    fn stage_name(&self) -> &str;
-    // fn cache_mut(&mut self) -> &mut HashMap<u64, Vec<Cached>>;
-}
-
-#[cfg_attr(feature = "tokio", async_trait::async_trait)]
-impl<S: Stage + Send + 'static> AnyNode for Node<S>
-where
-    S::State: Send,
-{
-    fn into_any(self: Box<Self>) -> Box<dyn Any> {
-        Box::new(*self)
+    async fn eval_async(&mut self) -> Result<Option<S::Output>, InjectionError> {
+        if let Some(inputs) = &mut self.inputs {
+            Ok(self.outputs.replace(self
+                .stage
+                .evaluate_async(&mut self.state, inputs, &mut self.cache).await?))
+        } else {
+            Err(InjectionError::InputNotFound(DataLabel::new_blank()))
+        }
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self as &dyn Any
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self as &mut dyn Any
-    }
-
-    fn eval_strategy(&self) -> EvalStrategy {
-        self.stage.eval_strategy()
-    }
-
-    fn reeval_rule(&self) -> ReevaluationRule {
-        self.stage.reeval_rule()
-    }
-
-    fn eval(&mut self) -> Result<Option<Box<dyn Any>>, InjectionError> {
-        let outputs: S::Output = self
-            .stage
-            .evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
-
-        Ok(self.outputs.replace(outputs).map(|o| Box::new(o) as Box<dyn Any>))
-    }
-
-    #[cfg(feature = "tokio")]
-    async fn eval_async(
-        &mut self,
-    ) -> Result<Option<Box<dyn Any + Send + Sync>>, InjectionError> {
-        let outputs: S::Output = self
-            .stage
-            .evaluate_async(&mut self.state, &mut self.inputs, &mut self.cache).await?;
-
-        Ok(self.outputs.replace(outputs).map(|o| Box::new(o) as Box<dyn Any + Send + Sync>))
-    }
-
-    fn flow_data(
-        &mut self,
-        child: &mut Box<dyn AnyNode>,
-        output: DataLabel,
-        input: DataLabel,
-    ) -> Result<(), InjectionError> {
-        self.stage.clone().inject_input(self, child, output, input)
-    }
-
-    fn inputs_mut(
-        &mut self,
-    ) -> &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)> {
-        &mut self.inputs
-    }
-
-    fn outputs_mut(&mut self) -> &mut (dyn Any + Send + Sync) {
-        &mut self.outputs
-    }
-
-    fn set_input_changed(&mut self, val: bool) {
-        self.input_changed = val;
-    }
-
-    fn input_changed(&self) -> bool {
-        self.input_changed
-    }
-
-    fn input_reftype(&self, name: &DataLabel) -> Option<RefType> {
-        self.stage.inputs().get(name).map(|input| input.1)
-    }
-
-    fn input_names(
-        &self,
-    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, (TypeId, RefType)>> {
-        self.stage.inputs().keys().cloned()
-    }
-
-    fn output_names(
-        &self,
-    ) -> std::iter::Cloned<std::collections::hash_map::Keys<'_, DataLabel, TypeId>> {
-        self.stage.outputs().keys().cloned()
-    }
-
-    fn stage_name(&self) -> &str {
-        self.stage.name()
-    }
-
-    // fn cache_mut(&mut self) -> &mut HashMap<u64, Vec<Cached<S::Output>>> {
-    //     &mut self.cache
-    // }
 }

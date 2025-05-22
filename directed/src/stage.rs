@@ -6,8 +6,8 @@ use std::{
 
 use crate::{
     InjectionError,
-    node::{AnyNode, Node},
-    types::{DataLabel, NodeOutput},
+    node::Node,
+    types::DataLabel,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
@@ -44,16 +44,16 @@ pub trait Stage: Clone {
     fn evaluate(
         &self,
         state: &mut Self::State,
-        inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-        cache: &mut HashMap<u64, Vec<crate::Cached<Self::Output>>>,
+        inputs: &mut Self::Input,
+        cache: &mut HashMap<u64, Vec<crate::Cached<Self::Input, Self::Output>>>,
     ) -> Result<Self::Output, InjectionError>;
     /// async version of evaluate
     #[cfg(feature = "tokio")]
     async fn evaluate_async(
         &self,
         state: &mut Self::State,
-        inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-        cache: &mut HashMap<u64, Vec<crate::Cached<Self::Output>>>,
+        inputs: &mut Self::Input,
+        cache: &mut HashMap<u64, Vec<crate::Cached<Self::Input, Self::Output>>>,
     ) -> Result<Self::Output, InjectionError>;
 
     fn eval_strategy(&self) -> EvalStrategy {
@@ -69,7 +69,7 @@ pub trait Stage: Clone {
     fn inject_input(
         &self,
         node: &mut Node<Self>,
-        parent: &mut Box<dyn AnyNode>,
+        parent: &mut Box<dyn Any>,
         output: DataLabel,
         input: DataLabel,
     ) -> Result<(), InjectionError>;

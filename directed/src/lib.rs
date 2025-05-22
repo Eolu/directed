@@ -9,10 +9,11 @@ mod types;
 pub use directed_stage_macro::stage;
 pub use error::*;
 pub use graphs::{EdgeInfo, Graph};
-pub use node::{AnyNode, Cached, DowncastEq, Node};
+pub use node::{Cached, DowncastEq, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, GraphOutput, NodeOutput};
+pub use phf;
 
 pub fn basic_cache_all_test() {
     use crate as directed;

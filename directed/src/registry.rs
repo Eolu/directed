@@ -1,17 +1,17 @@
 //! The registry is the "global" store of logic and state.
 use crate::{
     NodeTypeMismatchError, NodesNotFoundError, RegistryError,
-    node::{AnyNode, Node},
+    node::Node,
     stage::Stage,
 };
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 
 /// Used to access nodes within the registry, just a simple `usize` alias
 pub type NodeId = usize;
 
 /// A [Registry] stores each node, its state, and the logical [Stage]
 /// associated with it.
-pub struct Registry(pub(super) Vec<Option<Box<dyn AnyNode>>>);
+pub struct Registry(pub(super) Vec<Option<Box<dyn Any>>>);
 
 impl Registry {
     pub fn new() -> Self {
@@ -64,7 +64,6 @@ impl Registry {
     pub fn register<S: Stage + Send + 'static>(&mut self, stage: S) -> NodeId
     where
         S::State: Default + Send,
-        Node<S>: AnyNode
     {
         let next = self.0.len();
         self.0
@@ -84,7 +83,6 @@ impl Registry {
     ) -> NodeId
     where
         S::State: Send,
-        Node<S>: AnyNode
     {
         let next = self.0.len();
         self.0.push(Some(Box::new(Node::new(stage, state))));
@@ -140,7 +138,7 @@ impl Registry {
     }
 
     /// Get a type-erased node
-    pub fn get(&self, id: NodeId) -> Option<&Box<dyn AnyNode>> {
+    pub fn get(&self, id: NodeId) -> Option<&Box<dyn Any>> {
         match self.0.get(id) {
             Some(Some(node)) => Some(node),
             // TODO: Handle Some(None) as a special case, as this means the node is busy
@@ -150,7 +148,7 @@ impl Registry {
     }
 
     /// Get a mutable type-erased node
-    pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Box<dyn AnyNode>> {
+    pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Box<dyn Any>> {
         match self.0.get_mut(id) {
             Some(Some(node)) => Some(node),
             // TODO: Handle Some(None) as a special case, as this means the node is busy
@@ -169,7 +167,7 @@ impl Registry {
         &mut self,
         id0: NodeId,
         id1: NodeId,
-    ) -> Result<(&mut Box<dyn AnyNode>, &mut Box<dyn AnyNode>), NodesNotFoundError> {
+    ) -> Result<(&mut Box<dyn Any>, &mut Box<dyn Any>), NodesNotFoundError> {
         if id0 == id1 {
             panic!("Attempted to borrow node id {id0} twice")
         }
@@ -204,7 +202,7 @@ impl Registry {
     /// This does not unregister the node, and it can be placed back
     /// inside the registry via it's ID. Returns None if the node is
     /// already taken or never existed.
-    pub fn take_node(&mut self, id: NodeId) -> Option<Box<dyn AnyNode>> {
+    pub fn take_node(&mut self, id: NodeId) -> Option<Box<dyn Any>> {
         match self.0.get_mut(id) {
             Some(maybe_node) => maybe_node.take(),
             None => None,
@@ -214,7 +212,7 @@ impl Registry {
     /// Insert a node with the given ID back into the registry. Panics
     /// if the node never existed at that ID in the first place.
     // TODO: This could be a more frindly error
-    pub fn replace_node(&mut self, id: NodeId, node: Box<dyn AnyNode>) {
+    pub fn replace_node(&mut self, id: NodeId, node: Box<dyn Any>) {
         *self.0.get_mut(id).unwrap() = Some(node);
     }
 }
