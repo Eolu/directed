@@ -1,5 +1,5 @@
 //! Errors and the graph trace system
-use crate::{DataLabel, Graph, NodeId, Registry};
+use crate::{Graph, NodeId, Registry};
 use std::{
     borrow::Cow,
     fmt::{self, Display, Formatter, Write},
@@ -16,13 +16,13 @@ pub struct ErrorWithTrace<T: std::error::Error> {
 #[derive(thiserror::Error, Debug)]
 pub enum InjectionError {
     #[error("Output '{0:?}' not found")]
-    OutputNotFound(DataLabel),
+    OutputNotFound(String),
     #[error("Output '{0:?}' type mismatch")]
-    OutputTypeMismatch(DataLabel),
+    OutputTypeMismatch(String),
     #[error("Input '{0:?}' not found")]
-    InputNotFound(DataLabel),
+    InputNotFound(String),
     #[error("Input '{0:?}' type mismatch")]
-    InputTypeMismatch(DataLabel),
+    InputTypeMismatch(String),
     #[error("Input '{name}' type mismatch, expected '{expected}'")]
     InputTypeMismatchDetails {
         name: &'static str,
@@ -75,19 +75,19 @@ pub enum SetInputError {
     #[error(transparent)]
     NodesNotFoundInRegistry(#[from] NodesNotFoundError),
     #[error("{0:?} not found")]
-    InputNotFound(DataLabel),
+    InputNotFound(String),
     #[error("{0:?} already connected to parent output {1:?}")]
-    InputAlreadyConnected(DataLabel, DataLabel),
+    InputAlreadyConnected(String, String),
     #[error("{0:?} incorrect type")]
-    InputTypeMismatch(DataLabel)
+    InputTypeMismatch(String)
 }
 
 #[derive(thiserror::Error, Debug)]
 #[error("Nodes with id `{0:?}` not found in registry")]
-pub struct NodesNotFoundError(Vec<NodeId>);
+pub struct NodesNotFoundError(Vec<usize>);
 
-impl From<&[NodeId]> for NodesNotFoundError {
-    fn from(value: &[NodeId]) -> Self {
+impl From<&[usize]> for NodesNotFoundError {
+    fn from(value: &[usize]) -> Self {
         Self(Vec::from(value))
     }
 }
@@ -159,13 +159,13 @@ impl std::fmt::Debug for GraphTrace {
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     /// The unique ID of the node.
-    pub id: NodeId,
+    pub id: usize,
     /// The name of the node.
     pub name: String,
     /// The input names of the node.
-    pub inputs: Vec<DataLabel>,
+    pub inputs: Vec<String>,
     /// The output names of the node.
-    pub outputs: Vec<DataLabel>,
+    pub outputs: Vec<String>,
     /// Used for debugging purposes
     pub highlighted: bool,
 }
@@ -174,23 +174,15 @@ pub struct NodeInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionInfo {
     /// The ID of the source node.
-    pub source_id: NodeId,
+    pub source_id: usize,
     /// The output label of the source node.
-    pub source_output: DataLabel,
+    pub source_output: String,
     /// The ID of the target node.
-    pub target_id: NodeId,
+    pub target_id: usize,
     /// The input label of the target node.
-    pub target_input: DataLabel,
+    pub target_input: String,
     /// Used for debugging purposes
     pub highlighted: bool,
-}
-
-// Extension to Registry to allow access to nodes by ID
-impl Registry {
-    /// Gets a node by its ID.
-    pub fn get_node_by_id(&self, id: NodeId) -> Option<&Box<dyn std::any::Any>> {
-        self.0.get(id).map(|node| node.as_ref()).flatten()
-    }
 }
 
 impl Graph {
@@ -201,12 +193,13 @@ impl Graph {
 
         // Add node information
         for (&id, _) in &self.node_indices {
-            if let Some(node) = registry.get_node_by_id(id) {
+            if let Some(node) = registry.get_any(id) {
                 let node_info = NodeInfo {
                     id,
                     name: node.stage_name().to_string(),
-                    inputs: node.input_names().collect(),
-                    outputs: node.output_names().collect(),
+                    // TODO
+                    inputs: unimplemented!(),
+                    outputs: unimplemented!(),
                     highlighted: false,
                 };
                 nodes.push(node_info);
@@ -251,7 +244,7 @@ impl Graph {
 
 impl GraphTrace {
     /// Emphasizes a node in the trace
-    pub fn highlight_node(&mut self, node: NodeId) {
+    pub fn highlight_node(&mut self, node: usize) {
         if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node) {
             node.highlighted = true;
         }
@@ -260,10 +253,10 @@ impl GraphTrace {
     /// Emphasizes a connection in the trace
     pub fn highlight_connection(
         &mut self,
-        source_node: NodeId,
-        source_output: DataLabel,
-        target_node: NodeId,
-        target_input: DataLabel,
+        source_node: usize,
+        source_output: String,
+        target_node: usize,
+        target_input: String,
     ) {
         if let Some(conn) = self.connections.iter_mut().find(|conn| {
             conn.source_id == source_node
@@ -297,56 +290,41 @@ impl GraphTrace {
 
             // Define a node for each input port
             for input in &node.inputs {
-                let type_name = if let Some(type_name) = &input.type_name {
-                    type_name
-                } else {
-                    "?"
-                };
+                // TODO: Fix
+                let type_name = &input;
+                let input_name = &input;
                 writeln!(
                     &mut result,
                     "        {}_in_{}[/\"{}: {type_name}\"\\]",
                     node.id,
-                    input
-                        .name
-                        .as_ref()
-                        .map(|name| name.replace(SANITIZER, "_"))
-                        .unwrap_or_else(|| "!".into()),
-                    input.name.as_ref().unwrap_or_else(|| &Cow::Borrowed("!"))
+                    input_name.replace(SANITIZER, "_"),
+                    input_name
                 )
                 .unwrap();
             }
 
             // Define a node for each output port, unless this is a plain node.
-            let has_unnamed_output = node.outputs.len() == 1
-                && "_"
-                    == node.outputs[0]
-                        .name
-                        .as_ref()
-                        .unwrap_or_else(|| &Cow::Borrowed("!"));
+            let has_unnamed_output = node.outputs.len() == 1 && "_" == node.outputs[0];
             if !(has_unnamed_output
-                && Some(std::borrow::Cow::Borrowed("()")) == node.outputs[0].type_name)
+                && Some(std::borrow::Cow::Borrowed("()")) == Some(node.outputs[0].clone().into()))
             {
                 for output in &node.outputs {
                     write!(
                         &mut result,
                         "        {}_out_{}[\\\"",
                         node.id,
-                        output
-                            .name
-                            .as_ref()
-                            .map(|name| name.replace(SANITIZER, "_"))
-                            .unwrap_or_else(|| "!".into())
+                        output.replace(SANITIZER, "_")
                     )
                     .unwrap();
                     if !has_unnamed_output {
                         write!(
                             &mut result,
                             "{}: ",
-                            output.name.as_ref().unwrap_or_else(|| &Cow::Borrowed("!"))
+                            output
                         )
                         .unwrap();
                     }
-                    if let Some(type_name) = &output.type_name {
+                    if let Some(type_name) = Some(&output) {
                         write!(&mut result, "{type_name}").unwrap();
                     }
                     writeln!(&mut result, "\"/]").unwrap();
@@ -365,11 +343,7 @@ impl GraphTrace {
                 &mut result,
                 "    {}_out_{} ",
                 conn.source_id,
-                conn.source_output
-                    .name
-                    .as_ref()
-                    .map(|name| name.replace(SANITIZER, "_"))
-                    .unwrap_or_else(|| "!".into())
+                conn.source_output.replace(SANITIZER, "_")
             )
             .unwrap();
             write!(&mut result, "--> ").unwrap();
@@ -377,11 +351,7 @@ impl GraphTrace {
                 &mut result,
                 "{}_in_{}",
                 conn.target_id,
-                conn.target_input
-                    .name
-                    .as_ref()
-                    .map(|name| name.replace(SANITIZER, "_"))
-                    .unwrap_or_else(|| "!".into())
+                conn.target_input.replace(SANITIZER, "_")
             )
             .unwrap();
 

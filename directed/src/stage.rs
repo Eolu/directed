@@ -1,13 +1,10 @@
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     collections::HashMap,
-    sync::Arc,
 };
 
 use crate::{
-    InjectionError,
-    node::Node,
-    types::DataLabel,
+    node::Node, AnyNode, InjectionError
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
@@ -36,10 +33,6 @@ pub trait Stage: Clone {
     #[cfg(not(feature="tokio"))]
     type Output;
 
-    /// Used for typechecking inputs.
-    fn inputs(&self) -> &HashMap<DataLabel, (TypeId, RefType)>;
-    /// Used for typechecking outputs
-    fn outputs(&self) -> &HashMap<DataLabel, TypeId>;
     /// Evaluate the stage with the given input and state
     fn evaluate(
         &self,
@@ -69,9 +62,7 @@ pub trait Stage: Clone {
     fn inject_input(
         &self,
         node: &mut Node<Self>,
-        parent: &mut Box<dyn Any>,
-        output: DataLabel,
-        input: DataLabel,
+        parent: &mut Box<dyn AnyNode>
     ) -> Result<(), InjectionError>;
 
     /// Stage name, used for debugging information
@@ -87,7 +78,7 @@ pub enum EvalStrategy {
     Urgent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReevaluationRule {
     /// Always move outputs, reevaluate every time. If the receiving node takes
     /// a reference, it will be pased in, then dropped after that node

@@ -6,7 +6,7 @@ use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use crate::{
-    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodesNotFoundError, SetInputError
+    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodesNotFoundError, SetInputError, Stage
 };
 
 #[macro_export]
@@ -68,8 +68,8 @@ macro_rules! graph {
 /// See [`Registry`] for where state comes in.
 #[derive(Debug, Clone)]
 pub struct Graph {
-    pub(super) dag: Dag<NodeId, EdgeInfo>,
-    pub(super) node_indices: HashMap<NodeId, NodeIndex>,
+    pub(super) dag: Dag<usize, EdgeInfo>,
+    pub(super) node_indices: HashMap<usize, NodeIndex>,
 }
 
 /// Information about connections between nodes, purely an implementation
@@ -90,7 +90,7 @@ impl Graph {
 
     /// Takes a slice of node indicies and adds them to an unconnected graph.
     /// These are the indices returned by [`Registry::register`]
-    pub fn from_node_ids(node_ids: &[NodeId]) -> Self {
+    pub fn from_node_ids(node_ids: &[usize]) -> Self {
         let mut graph = Self::new();
         for i in node_ids {
             graph.add_node(*i);
@@ -99,7 +99,7 @@ impl Graph {
     }
 
     /// Adds a new node to the graph, by its [`Registry`] index.
-    pub fn add_node(&mut self, id: NodeId) -> NodeIndex {
+    pub fn add_node(&mut self, id: usize) -> NodeIndex {
         // TODO: Use node weights in a better way
         let idx = self.dag.add_node(id);
         self.node_indices.insert(id, idx);
@@ -110,19 +110,19 @@ impl Graph {
     /// in a new graph edge. See [`Registry`]
     pub fn connect(
         &mut self,
-        from_id: NodeId,
-        to_id: NodeId,
+        from_id: usize,
+        to_id: usize,
         source_output: DataLabel,
         target_input: DataLabel,
     ) -> Result<(), EdgeCreationError> {
         let from_idx = self
             .node_indices
             .get(&from_id)
-            .ok_or_else(|| NodesNotFoundError::from(&[from_id] as &[NodeId]))?;
+            .ok_or_else(|| NodesNotFoundError::from(&[from_id] as &[usize]))?;
         let to_idx = self
             .node_indices
             .get(&to_id)
-            .ok_or_else(|| NodesNotFoundError::from(&[to_id] as &[NodeId]))?;
+            .ok_or_else(|| NodesNotFoundError::from(&[to_id] as &[usize]))?;
         self.dag
             .add_edge(
                 *from_idx,
@@ -197,7 +197,7 @@ impl Graph {
 
     /// Execute a single node's stage within the graph. This will recursively execute
     /// all dependant parent nodes.
-    fn execute_node(
+    fn execute_node<S: Stage + 'static>(
         &self,
         idx: NodeIndex,
         top_trace: GraphTrace,
@@ -205,12 +205,12 @@ impl Graph {
     ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         // Get the node ID
         let node_id = self
-            .get_node_id_from_node_index(idx)
+            .get_node_id_from_node_index::<S>(idx)
             .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
             .map_err(|err| err.with_trace(top_trace.clone()))?;
 
         // Get all parent nodes
-        let parents: Vec<_> = self.dag.parents(idx).iter(&self.dag).collect();
+        let parents: Vec<(EdgeIndex, NodeIndex)> = self.dag.parents(idx).iter(&self.dag).collect();
 
         // First execute all parent nodes
         for parent in parents.iter() {
@@ -222,9 +222,9 @@ impl Graph {
         self.flow_data(registry, top_trace.clone(), node_id, &parents)?;
 
         // Get mutable ref to node
-        let node = registry.get_mut(node_id).ok_or_else(|| {
+        let node = registry.get_any_mut(node_id).ok_or_else(|| {
             ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
-                &[node_id] as &[NodeId],
+                &[node_id.into()] as &[usize],
             )))
             .with_trace(top_trace.clone())
         })?;
@@ -248,58 +248,7 @@ impl Graph {
         Ok(())
     }
 
-    /// This will take an output from the graph, either cloning it or removing it entirely, based on cache settings.
-    pub fn get_output(&self, registry: &mut Registry) -> Result<GraphOutput, NodeExecutionError> {
-        let urgent_nodes = self.urgent_nodes(registry)?;
-        let mut results = GraphOutput::new();
-        for idx in urgent_nodes {
-            let node_id = self.get_node_id_from_node_index(*idx)?;
-            if let Some(node) = registry.get_mut(node_id) {
-                if node.reeval_rule() == ReevaluationRule::Move {
-                    for (k, v) in node.outputs_mut().drain() {
-                        results.insert(node_id, k, v);
-                    }
-                } else {
-                    for (k, v) in node.outputs_mut() {
-                        results.insert(node_id, k.clone(), v.clone());
-                    }
-                }
-            }
-        }
-        Ok(results)
-    }
-
-    /// This will set the input of a particular node in the graph. Note that
-    /// the input must not be connected to the output of any other node.
-    pub fn set_input<T: Any + Send + Sync>(&self, registry: &mut Registry, node_id: NodeId, target_input: impl Into<DataLabel>, input: T) -> Result<Option<Arc<T>>, SetInputError> {
-        let data_label = target_input.into();
-        // Check to make sure input is unconnected
-        if let Some(&idx) = self.node_indices.get(&node_id) {
-            // TODO: Include parent name in error message
-            for (edge_idx, _) in self.dag.parents(idx).iter(&self.dag) {
-                if let Some(edge_info) = self.dag.edge_weight(edge_idx) {
-                    if edge_info.target_input == data_label {
-                        return Err(SetInputError::InputAlreadyConnected(data_label, edge_info.source_output.clone()));
-                    }
-                }
-            }
-        }
-        // self.dag.parents(self.node_indices.get(&node_id))
-        let node = registry.get_mut(node_id)
-            .ok_or_else(|| SetInputError::NodesNotFoundInRegistry((&[node_id] as &[usize]).into()))?;
-        if !node.input_names().any(|name| &name == &data_label) {
-            return Err(SetInputError::InputNotFound(data_label));
-        }
-        match node.inputs_mut().insert(data_label.clone(), (Arc::new(input), ReevaluationRule::Move)) {
-            Some((input, _)) => {
-                match input.downcast() {
-                    Ok(dc) => Ok(Some(dc)),
-                    Err(_) => Err(SetInputError::InputTypeMismatch(data_label))
-                }
-            },
-            None => Ok(None),
-        }
-    }
+    // TODO: get_output, set_input
 
     /// Execute a single node's stage asynchronously within the graph. This will recursively execute
     /// all dependant parent nodes in parallel.
@@ -379,11 +328,11 @@ impl Graph {
     }
 
     /// Flow outputs from all parent nodes to a node's inputs
-    fn flow_data(
+    fn flow_data<S: Stage + 'static>(
         &self,
         registry: &mut Registry,
         top_trace: GraphTrace,
-        node_id: NodeId,
+        node_id: NodeId<S>,
         parents: &[(EdgeIndex, NodeIndex)],
     ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         for parent in parents {
@@ -459,11 +408,11 @@ impl Graph {
                 .node_weight(*idx)
                 .ok_or_else(|| NodeExecutionError::from(NodeNotFoundInGraphError::from(*idx)))?;
 
-            let node = match registry.get(node_id) {
+            let node = match registry.get_any(node_id) {
                 Some(node) => node,
                 None => {
                     return Err(NodeExecutionError::from(NodesNotFoundError::from(
-                        &[node_id] as &[NodeId],
+                        &[node_id] as &[usize],
                     )));
                 }
             };
@@ -474,13 +423,13 @@ impl Graph {
         Ok(urgent_nodes)
     }
 
-    fn get_node_id_from_node_index(
+    fn get_node_id_from_node_index<S: Stage + 'static>(
         &self,
         idx: NodeIndex,
-    ) -> Result<NodeId, NodeNotFoundInGraphError> {
+    ) -> Result<NodeId<S>, NodeNotFoundInGraphError> {
         self.dag
             .node_weight(idx)
-            .map(|n| *n)
+            .map(|n| (*n).into())
             .ok_or_else(|| NodeNotFoundInGraphError::from(idx))
     }
 }

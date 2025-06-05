@@ -8,11 +8,56 @@ use std::{
 use crate::{
     InjectionError, RefType,
     stage::{EvalStrategy, ReevaluationRule, Stage},
-    types::DataLabel,
 };
 
-/// Used for single-output functions
-pub const UNNAMED_OUTPUT_NAME: DataLabel = DataLabel::new_const("_");
+/// Type-erasure for nodes
+pub trait AnyNode: Any {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
+    fn eval_strategy(&self) -> EvalStrategy;
+    fn reeval_rule(&self) -> ReevaluationRule;
+    fn stage_name(&self) -> &str;
+    fn input_changed(&self) -> bool;
+    fn set_input_changed(&mut self, value: bool);
+    fn eval(&mut self) -> Result<Option<Box<dyn Any>>, InjectionError>;
+}
+
+impl<S: Stage + 'static> AnyNode for Node<S> {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    
+    fn eval_strategy(&self) -> EvalStrategy {
+        self.stage.eval_strategy()
+    }
+    
+    fn reeval_rule(&self) -> ReevaluationRule {
+        self.stage.reeval_rule()
+    }
+    
+    fn stage_name(&self) -> &str {
+        self.stage.name()
+    }
+
+    fn input_changed(&self) -> bool {
+        self.input_changed
+    }
+
+    fn set_input_changed(&mut self, value: bool) {
+        self.input_changed = value;
+    }
+
+    fn eval(&mut self) -> Result<Option<Box<dyn Any>>, InjectionError> {
+        self.eval().map(|out| out.map(|out| Box::new(out) as Box<dyn Any>)) 
+    }
+}
 
 /// Every node wraps a Stage, which is a decorated function that has some
 /// number of inputs and some number of outputs.
@@ -72,7 +117,7 @@ impl<S: Stage> Node<S> {
                 .stage
                 .evaluate(&mut self.state, inputs, &mut self.cache)?))
         } else {
-            Err(InjectionError::InputNotFound(DataLabel::new_blank()))
+            Err(InjectionError::InputNotFound(String::new()))
         }
     }
 

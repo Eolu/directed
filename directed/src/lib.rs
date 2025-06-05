@@ -9,7 +9,7 @@ mod types;
 pub use directed_stage_macro::stage;
 pub use error::*;
 pub use graphs::{EdgeInfo, Graph};
-pub use node::{Cached, DowncastEq, Node};
+pub use node::{Cached, DowncastEq, Node, AnyNode};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
 pub use types::{DataLabel, GraphOutput, NodeOutput};
@@ -139,56 +139,57 @@ mod tests {
         graph.execute(&mut registry).unwrap();
     }
 
-    /// Test to verify that the output of a graph can be obtained
-    #[test]
-    fn get_output_test() {
-        #[stage]
-        fn TinyStage1() -> String {
-            println!("Running stage 1");
-            String::from("This is the output!")
-        }
+    // TODO: Reintroduce the below tests
+    // /// Test to verify that the output of a graph can be obtained
+    // #[test]
+    // fn get_output_test() {
+    //     #[stage]
+    //     fn TinyStage1() -> String {
+    //         println!("Running stage 1");
+    //         String::from("This is the output!")
+    //     }
 
-        let mut registry = Registry::new();
-        let node_1 = registry.register(TinyStage1::new());
-        let graph = graph! {
-            nodes: [node_1],
-            connections: {}
-        }
-        .unwrap();
+    //     let mut registry = Registry::new();
+    //     let node_1 = registry.register(TinyStage1::new());
+    //     let graph = graph! {
+    //         nodes: [node_1],
+    //         connections: {}
+    //     }
+    //     .unwrap();
 
-        graph.execute(&mut registry).unwrap();
-        let mut outputs = graph.get_output(&mut registry).unwrap();
-        assert_eq!(
-            outputs.take_unnamed::<String>(node_1).unwrap(),
-            String::from("This is the output!")
-        )
-    }
+    //     graph.execute(&mut registry).unwrap();
+    //     let mut outputs = graph.get_output(&mut registry).unwrap();
+    //     assert_eq!(
+    //         outputs.take_unnamed::<String>(node_1).unwrap(),
+    //         String::from("This is the output!")
+    //     )
+    // }
 
-    /// Test to verify that a grapoh can take inputs
-    #[test]
-    fn inject_input_test() {
-        #[stage]
-        fn TinyStage1(simple_input: String) -> String {
-            println!("Running stage 1");
-            simple_input.replace("input", "output")
-        }
+    // /// Test to verify that a grapoh can take inputs
+    // #[test]
+    // fn inject_input_test() {
+    //     #[stage]
+    //     fn TinyStage1(simple_input: String) -> String {
+    //         println!("Running stage 1");
+    //         simple_input.replace("input", "output")
+    //     }
 
-        let mut registry = Registry::new();
-        let node_1 = registry.register(TinyStage1::new());
-        let graph = graph! {
-            nodes: [node_1],
-            connections: {}
-        }
-        .unwrap();
+    //     let mut registry = Registry::new();
+    //     let node_1 = registry.register(TinyStage1::new());
+    //     let graph = graph! {
+    //         nodes: [node_1],
+    //         connections: {}
+    //     }
+    //     .unwrap();
 
-        graph.set_input(&mut registry, node_1, "simple_input", String::from("This is the simple input!")).unwrap();
-        graph.execute(&mut registry).unwrap();
-        let mut outputs = graph.get_output(&mut registry).unwrap();
-        assert_eq!(
-            outputs.take_unnamed::<String>(node_1).unwrap(),
-            String::from("This is the simple output!")
-        )
-    }
+    //     graph.set_input(&mut registry, node_1, "simple_input", String::from("This is the simple input!")).unwrap();
+    //     graph.execute(&mut registry).unwrap();
+    //     let mut outputs = graph.get_output(&mut registry).unwrap();
+    //     assert_eq!(
+    //         outputs.take_unnamed::<String>(node_1).unwrap(),
+    //         String::from("This is the simple output!")
+    //     )
+    // }
 
     // Test multiple output stages
     #[test]

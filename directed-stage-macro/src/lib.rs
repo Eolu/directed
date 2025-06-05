@@ -127,85 +127,39 @@ fn generate_extraction_code(
 
 /// This generates the code that uses the output of a parent node to set the
 /// input of a child node.
-/// 
-/// TODO: This is borderline spaghetti, needs some care
 fn input_injection(inputs: &[InputParam]) -> Result<proc_macro2::TokenStream, Diagnostic> {
-    let mut inject_opaque_out_code = Vec::new();
-    let mut inject_transparent_out_to_owned_in_code = Vec::new();
-    let mut inject_transparent_out_to_opaque_ref_in_code = Vec::new();
+    let mut match_arms = Vec::new();
 
     // Build match arms from inputs
     for input in inputs.iter() {
-        let arg_name = &input.name;
         let clean_arg_name = &input.clean_name;
-        let arg_type = true_type(&input.ty);
         let span = input.span.clone();
 
-        inject_opaque_out_code.push(quote_spanned! {span=>
+        match_arms.push(quote_spanned! {span=>
             Some(#clean_arg_name) => {
-                #[allow(unused_variables)]
-                let input_changed = node.input_changed();
-                let output_val = parent.outputs_mut()
-                    .remove(&output)
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
-                let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
-                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
-                node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::Move));
-                Ok(())
-            }
-        });
-        inject_transparent_out_to_owned_in_code.push(quote_spanned! {span=>
-            Some(#clean_arg_name) => {
-                #[allow(unused_variables)]
-                let input_changed = node.input_changed();
-                let output_val = parent.outputs_mut()
-                    .get(&output)
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?
-                    .clone(); // Clone the Arc
-                let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
-                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
-                match node.inputs_mut().get(&input) {
-                    Some((input_val, _)) => {
-                        let input_val = input_val
-                            .downcast_ref::<#arg_type>()
-                            .ok_or_else(|| directed::InjectionError::InputTypeMismatch(input.clone()))?;
-                        if !input_changed && output_val.as_ref() != input_val {
-                            node.set_input_changed(true);
-                        }
-                    },
-                    None => {
-                        node.set_input_changed(true);
+                // Cast node to the concrete type
+                let node = node.as_any_mut()
+                    .downcast_mut::<directed::Node<Self>>()
+                    .ok_or_else(|| directed::InjectionError::InputTypeMismatch(input.0.clone()))?;
+                
+                // Get output from parent (still type-erased)
+                let parent_any = parent.as_any();
+                
+                // We need to handle different cases based on parent's reevaluation rule
+                if parent.reeval_rule() == directed::ReevaluationRule::Move {
+                    // Parent is opaque - take the output
+                    if node.reeval_rule() == directed::ReevaluationRule::Move && input.1 != directed::RefType::Owned {
+                        // Both are opaque but child takes reference - share the Arc
+                        inject_transparent_out_to_opaque_ref_in(node, parent, output, &input.0)?;
+                    } else {
+                        // Take ownership from parent
+                        inject_opaque_out(node, parent, output, &input.0)?;
                     }
+                } else {
+                    // Parent is transparent - clone the output
+                    inject_transparent_out_to_owned_in(node, parent, output, &input.0)?;
                 }
-
-                node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::CacheLast));
-                Ok(())
-            }
-        });
-        inject_transparent_out_to_opaque_ref_in_code.push(quote_spanned! {span=>
-            Some(#clean_arg_name) => {
-                #[allow(unused_variables)]
-                let input_changed = node.input_changed();
-                let output_val_arc = parent.outputs_mut()
-                    .get(&output)
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
-                let output_val_ref = std::sync::Arc::downcast::<#arg_type>(output_val_arc.clone())
-                    .map_err(|_| directed::InjectionError::InputTypeMismatch(input.clone()))?;
-                match node.inputs_mut().get(&input) {
-                    Some((input_val, _)) => {
-                        let input_val = input_val
-                            .downcast_ref::<#arg_type>()
-                            .ok_or_else(|| directed::InjectionError::InputTypeMismatch(input.clone()))?;
-                        if !input_changed && input_val != &*output_val_ref {
-                            node.set_input_changed(true);
-                        }
-                    },
-                    None => {
-                        node.set_input_changed(true);
-                    }
-                }
-
-                node.inputs_mut().insert(input, (output_val_ref, directed::ReevaluationRule::CacheLast));
+                
                 Ok(())
             }
         });
@@ -216,35 +170,162 @@ fn input_injection(inputs: &[InputParam]) -> Result<proc_macro2::TokenStream, Di
         Some(name) => Err(directed::InjectionError::InputNotFound(name.into())),
         None => Ok(()) // This means there's a connection with no data associated
     };
-    inject_opaque_out_code.push(default_case.clone());
-    inject_transparent_out_to_owned_in_code.push(default_case.clone());
-    inject_transparent_out_to_opaque_ref_in_code.push(default_case);
+    match_arms.push(default_case);
+
+    // Generate the helper functions that work with concrete types
+    let inject_helpers = generate_inject_helpers(&inputs)?;
 
     Ok(quote_spanned! {Span::call_site()=>
-        fn inject_opaque_out(node: &mut dyn std::any::Any, parent: &mut Box<dyn std::any::Any>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-            match input.inner() {
-                #(#inject_opaque_out_code)*
-            }
+        #inject_helpers
+        
+        match input.0.inner() {
+            #(#match_arms)*
         }
-        fn inject_transparent_out_to_owned_in(node: &mut dyn std::any::Any, parent: &mut Box<dyn std::any::Any>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-            match input.inner() {
-                #(#inject_transparent_out_to_owned_in_code)*
+    })
+}
+
+fn generate_inject_helpers(inputs: &[InputParam]) -> Result<proc_macro2::TokenStream, Diagnostic> {
+    let mut inject_opaque_out_arms = Vec::new();
+    let mut inject_transparent_out_to_owned_in_arms = Vec::new();
+    let mut inject_transparent_out_to_opaque_ref_in_arms = Vec::new();
+
+    for input in inputs.iter() {
+        let arg_name = &input.name;
+        let clean_arg_name = &input.clean_name;
+        let arg_type = true_type(&input.ty);
+        let span = input.span.clone();
+
+        inject_opaque_out_arms.push(quote_spanned! {span=>
+            #clean_arg_name => {
+                // For opaque parent, we need to remove the output
+                // This is tricky since parent is type-erased - we need a way to remove outputs generically
+                // For now, assume parent has a method to take outputs
+                let output_val = parent.take_output(&output)
+                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
+                
+                let output_val = output_val
+                    .downcast::<#arg_type>()
+                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
+                
+                // Set on concrete node
+                if node.inputs.is_none() {
+                    node.inputs = Some(Default::default());
+                }
+                if let Some(inputs) = &mut node.inputs {
+                    inputs.#arg_name = Some((output_val, directed::ReevaluationRule::Move));
+                }
+                node.set_input_changed(true);
             }
-        }
-        fn inject_transparent_out_to_opaque_ref_in(node: &mut dyn std::any::Any, parent: &mut Box<dyn std::any::Any>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-            match input.inner() {
-                #(#inject_transparent_out_to_opaque_ref_in_code)*
+        });
+
+        inject_transparent_out_to_owned_in_arms.push(quote_spanned! {span=>
+            #clean_arg_name => {
+                // For transparent parent, clone the output
+                let output_val = parent.get_output(&output)
+                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
+                
+                let typed_val = output_val
+                    .downcast_ref::<#arg_type>()
+                    .ok_or_else(|| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
+                
+                // Check if changed
+                let input_changed = if let Some(inputs) = &node.inputs {
+                    if let Some((existing_val, _)) = &inputs.#arg_name {
+                        existing_val.as_ref() != typed_val
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+                
+                if input_changed && !node.input_changed() {
+                    node.set_input_changed(true);
+                }
+                
+                // Set on concrete node
+                if node.inputs.is_none() {
+                    node.inputs = Some(Default::default());
+                }
+                if let Some(inputs) = &mut node.inputs {
+                    inputs.#arg_name = Some((std::sync::Arc::new(typed_val.clone()), directed::ReevaluationRule::CacheLast));
+                }
             }
+        });
+
+        inject_transparent_out_to_opaque_ref_in_arms.push(quote_spanned! {span=>
+            #clean_arg_name => {
+                // Share the Arc directly
+                let output_arc = parent.get_output_arc(&output)
+                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
+                
+                let typed_arc = std::sync::Arc::downcast::<#arg_type>(output_arc)
+                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
+                
+                // Check if changed
+                let input_changed = if let Some(inputs) = &node.inputs {
+                    if let Some((existing_val, _)) = &inputs.#arg_name {
+                        !std::sync::Arc::ptr_eq(existing_val, &typed_arc)
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+                
+                if input_changed && !node.input_changed() {
+                    node.set_input_changed(true);
+                }
+                
+                // Set on concrete node
+                if node.inputs.is_none() {
+                    node.inputs = Some(Default::default());
+                }
+                if let Some(inputs) = &mut node.inputs {
+                    inputs.#arg_name = Some((typed_arc, directed::ReevaluationRule::CacheLast));
+                }
+            }
+        });
+    }
+
+    Ok(quote_spanned! {Span::call_site()=>
+        fn inject_opaque_out(
+            node: &mut directed::Node<Self>,
+            parent: &mut Box<dyn directed::AnyNode>,
+            output: directed::DataLabel,
+            input_name: &str
+        ) -> Result<(), directed::InjectionError> {
+            match input_name {
+                #(#inject_opaque_out_arms)*
+                _ => Err(directed::InjectionError::InputNotFound(input_name.into()))
+            }
+            Ok(())
         }
 
-        if parent.reeval_rule() == directed::ReevaluationRule::Move {
-            if node.reeval_rule() == directed::ReevaluationRule::Move && node.input_reftype(&input) != Some(directed::RefType::Owned) {
-                inject_transparent_out_to_opaque_ref_in(node, parent, output, input)
-            } else {
-                inject_opaque_out(node, parent, output, input)
+        fn inject_transparent_out_to_owned_in(
+            node: &mut directed::Node<Self>,
+            parent: &mut Box<dyn directed::AnyNode>,
+            output: directed::DataLabel,
+            input_name: &str
+        ) -> Result<(), directed::InjectionError> {
+            match input_name {
+                #(#inject_transparent_out_to_owned_in_arms)*
+                _ => Err(directed::InjectionError::InputNotFound(input_name.into()))
             }
-        } else {
-            inject_transparent_out_to_owned_in(node, parent, output, input)
+            Ok(())
+        }
+
+        fn inject_transparent_out_to_opaque_ref_in(
+            node: &mut directed::Node<Self>,
+            parent: &mut Box<dyn directed::AnyNode>,
+            output: directed::DataLabel,
+            input_name: &str
+        ) -> Result<(), directed::InjectionError> {
+            match input_name {
+                #(#inject_transparent_out_to_opaque_ref_in_arms)*
+                _ => Err(directed::InjectionError::InputNotFound(input_name.into()))
+            }
+            Ok(())
         }
     })
 }
@@ -272,18 +353,6 @@ fn generate_output_handling(
         .iter()
         .map(|input| &input.ty)
         .collect::<Vec<_>>();
-    let downcast_ref_calls = clean_names.iter().zip(arg_types.iter()).zip(arg_names.iter()).map(|((clean_name, arg_type), arg_name)| {
-        let name_span = arg_name.span();
-        quote_spanned!{name_span=>
-            if let Some(cached_in) = cached.inputs.get(&directed::DataLabel::new_with_type_name(#clean_name, stringify!(#arg_type))) {
-                if let Some(dc) = in_val.0.downcast_ref::<#arg_type>() {
-                    if dc.downcast_eq(&**cached_in) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }).collect::<Vec<_>>();
     let state_as_inputs = match config.states.len(){
         0 => vec![],
         1 => {
@@ -335,12 +404,7 @@ fn generate_output_handling(
             let cached = cache.get(&hash).and_then(|cached| {
                 #[allow(unused_imports)]
                 use directed::DowncastEq;
-                cached.iter().find(|cached| {
-                    inputs.iter().all(|(in_name, in_val)| {
-                        #(#downcast_ref_calls)*
-                        false
-                    })
-                })
+                cached.iter().find(|cached| cached.inputs == *inputs)
             });
 
             if let Some(cached) = cached {
@@ -511,8 +575,6 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
     };
 
     // Generate code sections
-    let input_registrations = generate_input_registrations(&config.inputs)?;
-    let output_registrations = generate_output_registrations(&config.outputs)?;
     let extraction_code = generate_extraction_code(&config.inputs, config.cache_strategy)?;
     let injection_code = input_injection(&config.inputs)?;
     let prepare_input_types_code = prepare_input_types(&config)?;
@@ -636,7 +698,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 #reevaluation_rule
             }
 
-            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn std::any::Any>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
+            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>) -> Result<(), directed::InjectionError> {
                 #injection_code
             }
 
