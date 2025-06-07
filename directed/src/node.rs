@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     sync::Arc,
 };
+use facet::{Facet, Field, Shape};
 
 use crate::{
     InjectionError, RefType,
@@ -21,6 +22,17 @@ pub trait AnyNode: Any {
     fn input_changed(&self) -> bool;
     fn set_input_changed(&mut self, value: bool);
     fn eval(&mut self) -> Result<Option<Box<dyn Any>>, InjectionError>;
+    fn input_shape(&self) -> &Shape;
+    fn output_shape(&self) -> &Shape;
+    fn state_shape(&self) -> &Shape;
+    /// This a a core part of the plumbing of this crate - take the outputs of
+    /// a parent node and use them to set the inputs of a child node.
+    fn flow_data(
+        &mut self,
+        child: &mut Box<dyn AnyNode>,
+        output: Field,
+        input: Field,
+    ) -> Result<(), InjectionError>;
 }
 
 impl<S: Stage + 'static> AnyNode for Node<S> {
@@ -56,6 +68,27 @@ impl<S: Stage + 'static> AnyNode for Node<S> {
 
     fn eval(&mut self) -> Result<Option<Box<dyn Any>>, InjectionError> {
         self.eval().map(|out| out.map(|out| Box::new(out) as Box<dyn Any>)) 
+    }
+
+    fn input_shape(&self) -> &Shape {
+        S::Input::SHAPE
+    }
+
+    fn output_shape(&self) -> &Shape {
+        S::Output::SHAPE
+    }
+
+    fn state_shape(&self) -> &Shape {
+        S::State::SHAPE
+    }
+
+    fn flow_data(
+        &mut self,
+        child: &mut Box<dyn AnyNode>,
+        output: Field,
+        input: Field,
+    ) -> Result<(), InjectionError> {
+        self.stage.clone().inject_input(self, child, output, input)
     }
 }
 

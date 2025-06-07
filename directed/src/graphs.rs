@@ -6,7 +6,7 @@ use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use crate::{
-    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, types::DataLabel, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphOutput, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodesNotFoundError, SetInputError, Stage
+    registry::Registry, stage::{EvalStrategy, ReevaluationRule}, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError, NodeId, NodeNotFoundInGraphError, NodesNotFoundError, SetInputError, Stage
 };
 
 #[macro_export]
@@ -76,8 +76,8 @@ pub struct Graph {
 /// detail of the graph.
 #[derive(Debug, Clone)]
 pub struct EdgeInfo {
-    pub(super) source_output: DataLabel,
-    pub(super) target_input: DataLabel,
+    pub(super) source_output: facet::Field,
+    pub(super) target_input: facet::Field,
 }
 
 impl Graph {
@@ -112,8 +112,8 @@ impl Graph {
         &mut self,
         from_id: usize,
         to_id: usize,
-        source_output: DataLabel,
-        target_input: DataLabel,
+        source_output: facet::Field,
+        target_input: facet::Field,
     ) -> Result<(), EdgeCreationError> {
         let from_idx = self
             .node_indices
@@ -197,7 +197,7 @@ impl Graph {
 
     /// Execute a single node's stage within the graph. This will recursively execute
     /// all dependant parent nodes.
-    fn execute_node<S: Stage + 'static>(
+    fn execute_node(
         &self,
         idx: NodeIndex,
         top_trace: GraphTrace,
@@ -205,7 +205,7 @@ impl Graph {
     ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         // Get the node ID
         let node_id = self
-            .get_node_id_from_node_index::<S>(idx)
+            .get_node_id_from_node_index(idx)
             .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
             .map_err(|err| err.with_trace(top_trace.clone()))?;
 
@@ -332,7 +332,7 @@ impl Graph {
         &self,
         registry: &mut Registry,
         top_trace: GraphTrace,
-        node_id: NodeId<S>,
+        node_id: usize,
         parents: &[(EdgeIndex, NodeIndex)],
     ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         for parent in parents {
@@ -367,7 +367,7 @@ impl Graph {
                 })?;
 
             let (node, parent_node) = registry
-                .get2_mut(node_id, parent_id)
+                .get_any_2_mut(node_id, parent_id)
                 .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
                 .map_err(|err| err.with_trace(top_trace.clone()))?;
 
@@ -423,10 +423,10 @@ impl Graph {
         Ok(urgent_nodes)
     }
 
-    fn get_node_id_from_node_index<S: Stage + 'static>(
+    fn get_node_id_from_node_index(
         &self,
         idx: NodeIndex,
-    ) -> Result<NodeId<S>, NodeNotFoundInGraphError> {
+    ) -> Result<usize, NodeNotFoundInGraphError> {
         self.dag
             .node_weight(idx)
             .map(|n| (*n).into())

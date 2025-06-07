@@ -1,11 +1,9 @@
-use std::{
-    any::TypeId,
-    collections::HashMap,
-};
+use std::collections::HashMap;
 
 use crate::{
     node::Node, AnyNode, InjectionError
 };
+use facet::Facet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum RefType {
@@ -19,19 +17,17 @@ pub enum RefType {
 pub trait Stage: Clone {
     /// Internal state only, no special rules apply to this. This is stored
     /// as a tuple of all state parameters in order.
-    type State;
-    /// TODO: Contender to replace 'State' with actual named params
-    type StateStruct;
+    type State: Facet<'static>;
     /// TODO: The input of this stage
     #[cfg(feature="tokio")]
-    type Input: Send + Sync;
+    type Input: Send + Sync + Facet<'static>;
     #[cfg(not(feature="tokio"))]
-    type Input;
+    type Input: Facet<'static>;
     /// TODO: The output of this stage
     #[cfg(feature="tokio")]
-    type Output: Send + Sync;
+    type Output: Send + Sync + Facet<'static>;
     #[cfg(not(feature="tokio"))]
-    type Output;
+    type Output: Facet<'static>;
 
     /// Evaluate the stage with the given input and state
     fn evaluate(

@@ -516,13 +516,13 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
     // Determine derives for inputs
     let input_derives = match config.cache_strategy.0 {
         CacheStrategy::None => quote::quote!{},
-        CacheStrategy::Last => quote_spanned!{config.cache_strategy.1=>#[derive(Clone, PartialEq)]},
-        CacheStrategy::All => quote_spanned!{config.cache_strategy.1=>#[derive(Clone, PartialEq, Eq, Hash)]},
+        CacheStrategy::Last => quote_spanned!{config.cache_strategy.1=>#[derive(Clone, PartialEq, crate::facet::Facet)]},
+        CacheStrategy::All => quote_spanned!{config.cache_strategy.1=>#[derive(Clone, PartialEq, Eq, Hash, crate::facet::Facet)]},
     };
     // Determine derives for outputs
     let output_derives = match config.cache_strategy.0 {
-        CacheStrategy::None => quote::quote!{},
-        CacheStrategy::Last | CacheStrategy::All => quote_spanned!{config.cache_strategy.1=>#[derive(Clone)]},
+        CacheStrategy::None => quote::quote!{#[derive(crate::facet::Facet)]},
+        CacheStrategy::Last | CacheStrategy::All => quote_spanned!{config.cache_strategy.1=>#[derive(Clone, crate::facet::Facet)]},
     };
 
     // Create useful structs
@@ -569,6 +569,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
         }
     }));
     let state_struct = quote_spanned!{Span::call_site()=> 
+        #[derive(crate::facet::Facet)]
         #fn_vis struct #state_struct_name {
             #state_struct_fields
         }
@@ -659,17 +660,15 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
             type Input = #input_struct_name;
             type Output = #output_struct_name;
             type State = #state_struct_name;
-            type StateStruct = #state_struct_name;
 
-            fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
-                // TODO
-                unimplemented!()
-            }
+            // TODO
+            // fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
+            //     unimplemented!()
+            // }
 
-            fn outputs(&self) -> &std::collections::HashMap<directed::DataLabel, std::any::TypeId> {
-                // TODO
-                unimplemented!()
-            }
+            // fn outputs(&self) -> &std::collections::HashMap<directed::DataLabel, std::any::TypeId> {
+            //     unimplemented!()
+            // }
 
             fn evaluate(
                 &self,

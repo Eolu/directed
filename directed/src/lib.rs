@@ -4,7 +4,6 @@ mod graphs;
 mod node;
 mod registry;
 mod stage;
-mod types;
 
 pub use directed_stage_macro::stage;
 pub use error::*;
@@ -12,11 +11,11 @@ pub use graphs::{EdgeInfo, Graph};
 pub use node::{Cached, DowncastEq, Node, AnyNode};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage};
-pub use types::{DataLabel, GraphOutput, NodeOutput};
-pub use phf;
+pub use facet;
 
 pub fn basic_cache_all_test() {
     use crate as directed;
+    use facet::Facet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
