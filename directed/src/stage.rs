@@ -15,20 +15,6 @@ pub enum RefType {
     BorrowedMut,
 }
 
-impl From<&Field> for RefType {
-    fn from(value: &Field) -> Self {
-        if let facet::Type::Pointer(facet::PointerType::Reference(ty)) = value.shape.ty {
-            if ty.mutable {
-                Self::BorrowedMut
-            } else {
-                Self::Borrowed
-            }
-        } else {
-            Self::Owned
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StageShape {
     pub stage_name: &'static str,

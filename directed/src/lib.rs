@@ -10,7 +10,7 @@ pub use directed_stage_macro::stage;
 pub use error::*;
 pub use facet;
 pub use graphs::{EdgeInfo, Graph};
-pub use node::{AnyNode, Cached, DowncastEq, DynFields, Node};
+pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, SetVal, Stage, StageShape};
 
@@ -88,7 +88,7 @@ mod tests {
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // A simple sanity-check test that doesn't try anything interesting
+    /// A simple sanity-check test that doesn't try anything interesting
     #[test]
     fn basic_macro_test() {
         #[stage(lazy, cache_last)]
@@ -124,6 +124,66 @@ mod tests {
         .unwrap();
 
         graph.execute(&mut registry).unwrap();
+    }
+
+    /// Test a stage that takes a value in by reference
+    #[test]
+    fn inject_transparent_out_to_opaque_ref_in_test() {
+        #[stage(lazy, cache_last)]
+        fn TinyStage1() -> String {
+            println!("Running stage 1");
+            String::from("This is the output!")
+        }
+
+        #[stage(lazy)]
+        fn TinyStage2(input: String, input2: String) -> String {
+            println!("Running stage 2");
+            input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
+        }
+
+        #[stage]
+        fn TinyStage3(input: String) {
+            println!("Running stage 3");
+            assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
+        }
+
+        let mut registry = Registry::new();
+        let node_1 = registry.register(TinyStage1);
+        let node_2 = registry.register(TinyStage2);
+        let node_3 = registry.register(TinyStage3);
+        let graph = graph! {
+            nodes: (node_1, node_2, node_3),
+            connections: {
+                node_1 => node_2: input,
+                node_1 => node_2: input2,
+                node_2 => node_3: input,
+            }
+        }
+        .unwrap();
+
+        graph.execute(&mut registry).unwrap();
+
+        // Now make saure it fails when caching is disabled
+
+        #[stage(lazy)]
+        fn TinyStageNoCache() -> String {
+            println!("Running stage 1");
+            String::from("This is the output!")
+        }
+
+        let node_1 = registry.register(TinyStageNoCache);
+
+        let graph = graph! {
+            nodes: (node_1, node_2, node_3),
+            connections: {
+                node_1 => node_2: input,
+                node_1 => node_2: input2,
+                node_2 => node_3: input,
+            }
+        }
+        .unwrap();
+
+        assert!(graph.execute(&mut registry).is_err())
     }
 
     // TODO: Reintroduce this
@@ -390,20 +450,6 @@ mod tests {
         assert!(registry.get(node_id).is_none());
     }
 
-    // // Test error handling when node doesn't exist
-    // #[test]
-    // fn nonexistent_node_test() {
-    //     let mut registry = Registry::new();
-
-    //     // Node ID that doesn't exist
-    //     let invalid_id = 9999;
-
-    //     // Various operations should fail
-    //     assert!(registry.get(invalid_id).is_none());
-    //     assert!(registry.get_mut(invalid_id).is_none());
-    //     assert!(registry.unregister_and_drop(invalid_id).is_err());
-    // }
-
     // Test type mismatches in connections
     #[test]
     fn type_mismatch_test() {
@@ -513,41 +559,6 @@ mod tests {
         graph.execute(&mut registry).unwrap();
     }
 
-    // // Test accessing outputs by wrong name
-    // #[test]
-    // fn invalid_output_name_test() {
-    //     #[stage]
-    //     fn MultiOutputStage() -> NodeOutput {
-    //         output! {
-    //             output1: 42,
-    //             output2: "Hello".to_string()
-    //         }
-    //     }
-
-    //     #[stage]
-    //     fn ConsumerStage(_input: i32) {
-    //         // Should never execute
-    //         panic!("Should not execute");
-    //     }
-
-    //     let mut registry = Registry::new();
-    //     let producer = registry.register(MultiOutputStage::new());
-    //     let consumer = registry.register(ConsumerStage::new());
-
-    //     // Connect with non-existent output name
-    //     let graph = graph! {
-    //         nodes: (producer, consumer),
-    //         connections: {
-    //             producer: nonexistent => consumer: input,
-    //         }
-    //     }
-    //     .unwrap();
-
-    //     // Should fail because the output name doesn't exist
-    //     let result = graph.execute(&mut registry);
-    //     assert!(result.is_err());
-    // }
-
     /// Test nodes with internal state
     #[test]
     fn node_with_state_test() {
@@ -581,7 +592,7 @@ mod tests {
     #[test]
     fn output_macro_test() {
         #[stage(out(number: i32, text: String, vector: Vec<i32>))]
-        fn ProduceOutput1() -> NodeOutput {
+        fn ProduceOutput1() {
             println!("Running ProduceOutput1");
             let number = 42;
             let text = "hello".to_string();
@@ -647,83 +658,83 @@ mod tests {
         assert!(registry.unregister::<StageA>(node_a.into()).is_ok());
     }
 
-    // #[test]
-    // fn basic_cache_all_test() {
-    //     static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    #[test]
+    fn basic_cache_all_test() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    //     #[stage(lazy, cache_all)]
-    //     fn CacheStage1() -> String {
-    //         println!("Running stage 1");
-    //         COUNTER.fetch_add(1, Ordering::SeqCst);
-    //         String::from("This is the output!")
-    //     }
+        #[stage(lazy, cache_all)]
+        fn CacheStage1() -> String {
+            println!("Running stage 1");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            String::from("This is the output!")
+        }
 
-    //     #[stage(lazy, cache_all)]
-    //     fn CacheStage2(input: String, input2: String) -> String {
-    //         println!("Running stage 2");
-    //         COUNTER.fetch_add(1, Ordering::SeqCst);
-    //         input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
-    //     }
+        #[stage(lazy, cache_all)]
+        fn CacheStage2(input: String, input2: String) -> String {
+            println!("Running stage 2");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
+        }
 
-    //     #[stage(cache_last)]
-    //     fn TinyStage3(input: String) {
-    //         println!("Running stage 3");
-    //         assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
-    //     }
+        #[stage(cache_last)]
+        fn TinyStage3(input: String) {
+            println!("Running stage 3");
+            assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
+        }
 
-    //     #[stage(lazy, cache_all)]
-    //     fn CacheStage1Alternate() -> String {
-    //         println!("Running alt stage 1");
-    //         COUNTER.fetch_add(1, Ordering::SeqCst);
-    //         String::from("This is a different output!")
-    //     }
+        #[stage(lazy, cache_all)]
+        fn CacheStage1Alternate() -> String {
+            println!("Running alt stage 1");
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            String::from("This is a different output!")
+        }
 
-    //     #[stage(cache_last)]
-    //     fn TinyStage3Alternate(input: String) {
-    //         println!("Running alt stage 3");
-    //         assert_eq!("THIS IS A DIFFERENT OUTPUT! [27 chars]", input);
-    //     }
+        #[stage(cache_last)]
+        fn TinyStage3Alternate(input: String) {
+            println!("Running alt stage 3");
+            assert_eq!("THIS IS A DIFFERENT OUTPUT! [27 chars]", input);
+        }
 
-    //     let mut registry = Registry::new();
-    //     let node_1 = registry.register(CacheStage1);
-    //     let node_2 = registry.register(CacheStage2);
-    //     let node_3 = registry.register(TinyStage3);
-    //     let node_1_alt = registry.register(CacheStage1Alternate);
-    //     let node_3_alt = registry.register(TinyStage3Alternate);
+        let mut registry = Registry::new();
+        let node_1 = registry.register(CacheStage1);
+        let node_2 = registry.register(CacheStage2);
+        let node_3 = registry.register(TinyStage3);
+        let node_1_alt = registry.register(CacheStage1Alternate);
+        let node_3_alt = registry.register(TinyStage3Alternate);
 
-    //     let graph1 = graph! {
-    //         nodes: (node_1, node_2, node_3),
-    //         connections: {
-    //             node_1 => node_2: input,
-    //             node_1 => node_2: input2,
-    //             node_2 => node_3: input,
-    //         }
-    //     }
-    //     .unwrap();
+        let graph1 = graph! {
+            nodes: (node_1, node_2, node_3),
+            connections: {
+                node_1 => node_2: input,
+                node_1 => node_2: input2,
+                node_2 => node_3: input,
+            }
+        }
+        .unwrap();
 
-    //     graph1.execute(&mut registry).unwrap();
-    //     assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
-    //     graph1.execute(&mut registry).unwrap();
-    //     assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+        graph1.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+        graph1.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
 
-    //     // Now with a modified graph, but same stage 2
-    //     let graph2 = graph! {
-    //         nodes: (node_1_alt, node_2, node_3_alt),
-    //         connections: {
-    //             node_1_alt => node_2: input,
-    //             node_1_alt => node_2: input2,
-    //             node_2 => node_3_alt: input,
-    //         }
-    //     }
-    //     .unwrap();
+        // Now with a modified graph, but same stage 2
+        let graph2 = graph! {
+            nodes: (node_1_alt, node_2, node_3_alt),
+            connections: {
+                node_1_alt => node_2: input,
+                node_1_alt => node_2: input2,
+                node_2 => node_3_alt: input,
+            }
+        }
+        .unwrap();
 
-    //     graph2.execute(&mut registry).unwrap();
-    //     assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-    //     graph2.execute(&mut registry).unwrap();
-    //     assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-    //     graph1.execute(&mut registry).unwrap();
-    //     assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-    // }
+        graph2.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+        graph2.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+        graph1.execute(&mut registry).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+    }
 
     /// Test connections without data
     #[test]

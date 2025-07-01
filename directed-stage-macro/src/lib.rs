@@ -37,7 +37,7 @@ fn generate_input_registrations(
     inputs: &[InputParam],
 ) -> Result<Vec<proc_macro2::TokenStream>, Diagnostic> {
     Ok(inputs.iter().map(|input| {
-        let arg_name = &input.clean_name;
+        let arg_name = input.clean_name.to_string();
         let arg_type = &input.ty;
         let ref_type = input.ref_type.quoted();
         let span = input.span.clone();
@@ -92,31 +92,27 @@ fn generate_extraction_code(
     cache_strategy: (CacheStrategy, Span),
 ) -> Result<Vec<proc_macro2::TokenStream>, Diagnostic> {
     Ok(inputs.iter().map(|input| {
-        let arg_name = &input.name;
+        let arg_name = &input.clean_name;
         let arg_type = true_type(&input.ty);
-        let clean_arg_name = &input.clean_name;
+        let clean_arg_name = input.clean_name.to_string();
         let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
         let input_span = input.span.clone();
 
         match cache_strategy {
             (CacheStrategy::None, _span) => quote_spanned! {input_span=>
                 // Non-transparent functions never clone, always move
-                let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = {
-                    if let Some((arg, reeval_name)) = inputs.#arg_name.take() {
-                        (arg, reeval_name)
-                    } else {
-                        // TODO: Graceful error
-                        panic!("ERROR (CacheStrategy::None) NOT YET IMPLEMENTED");
+                let (#arg_name, #reeval_name): (#arg_type, directed::ReevaluationRule) = {
+                    match inputs.#arg_name.take() {
+                        Some((arg, reeval_name)) => (arg, reeval_name),
+                        None => return Err(directed::InjectionError::InputNotFound(Self::SHAPE.input_fields().iter().find(|field| field.name == #clean_arg_name)))
                     }
                 };
             },
             (CacheStrategy::Last, _span) | (CacheStrategy::All, _span) => quote_spanned! {input_span=>
-                let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = {
-                    if let Some((arg, reeval_name)) = &inputs.#arg_name {
-                        (arg.clone(), *reeval_name)
-                    } else {
-                        // TODO: Graceful error
-                        panic!("ERROR (CacheStrategy::Last | CacheStrategy::All) NOT YET IMPLEMENTED");
+                let (#arg_name, #reeval_name): (#arg_type, directed::ReevaluationRule) = {
+                    match &inputs.#arg_name {
+                        Some((arg, reeval_name)) => (arg.clone(), *reeval_name),
+                        None => return Err(directed::InjectionError::InputNotFound(Self::SHAPE.input_fields().iter().find(|field| field.name == #clean_arg_name)))
                     }
                 };
             },
@@ -134,7 +130,7 @@ fn input_injection(
 
     // Build match arms from inputs
     for input in inputs.iter() {
-        let clean_arg_name = &input.clean_name;
+        let clean_arg_name = input.clean_name.to_string();
         let span = input.span.clone();
 
         match_arms.push(quote_spanned! {span=>
@@ -146,19 +142,9 @@ fn input_injection(
                 
                 // We need to handle different cases based on parent's reevaluation rule
                 if parent.reeval_rule() == directed::ReevaluationRule::Move {
-                    // Parent is opaque - take the output
-                    if node.reeval_rule() == directed::ReevaluationRule::Move && node.stage_shape().input_fields().iter()
-                            .find(|field| input.filter(|input| input.name == field.name).is_some())
-                            .map(|field| directed::RefType::from(field)).unwrap_or(directed::RefType::Owned) != directed::RefType::Owned {
-                        // Both are opaque but child takes reference - share the Arc
-                        inject_transparent_out_to_opaque_ref_in(node, parent, output, input)?;
-                    } else {
-                        // Take ownership from parent
-                        inject_opaque_out(node, parent, output, input)?;
-                    }
+                    inject_move(node, parent, output, input)?;
                 } else {
-                    // Parent is transparent - clone the output
-                    inject_transparent_out_to_owned_in(node, parent, output, input)?;
+                    inject_clone(node, parent, output, input)?;
                 }
                 
                 Ok(())
@@ -193,17 +179,16 @@ fn generate_inject_helpers(
     stage_name: &syn::Ident,
     inputs: &[InputParam],
 ) -> Result<proc_macro2::TokenStream, Diagnostic> {
-    let mut inject_opaque_out_arms = Vec::new();
-    let mut inject_transparent_out_to_owned_in_arms = Vec::new();
-    let mut inject_transparent_out_to_opaque_ref_in_arms = Vec::new();
+    let mut inject_move_arms = Vec::new();
+    let mut inject_clone_arms = Vec::new();
 
     for input in inputs.iter() {
-        let arg_name = &input.name;
-        let clean_arg_name = &input.clean_name;
+        let arg_name = &input.clean_name;
+        let clean_arg_name = &input.clean_name.to_string();
         let arg_type = true_type(&input.ty);
         let span = input.span.clone();
 
-        inject_opaque_out_arms.push(quote_spanned! {span=>
+        inject_move_arms.push(quote_spanned! {span=>
             Some(#clean_arg_name) => {
                 // For opaque parent, we need to remove the output
                 let output_val = parent.outputs_mut()
@@ -213,16 +198,16 @@ fn generate_inject_helpers(
 
                 let typed_val = output_val
                     .downcast::<#arg_type>()
-                    .ok_or_else(|| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
+                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
 
                 node.set_input_changed(true);
 
                 // TODO: Do something with old val
-                node.inputs.#arg_name.replace((typed_val, directed::ReevaluationRule::Move));
+                node.inputs.#arg_name.replace((*typed_val, directed::ReevaluationRule::Move));
             }
         });
 
-        inject_transparent_out_to_owned_in_arms.push(quote_spanned! {span=>
+        inject_clone_arms.push(quote_spanned! {span=>
             Some(#clean_arg_name) => {
                 // For transparent parent, clone the output
                 let output_val = parent.outputs_mut()
@@ -236,7 +221,7 @@ fn generate_inject_helpers(
                 
                 // Check if changed
                 let input_changed = if let Some((existing_val, _)) = &node.inputs.#arg_name {
-                    *typed_val != **existing_val
+                    *typed_val != *existing_val
                 } else {
                     true
                 };
@@ -247,84 +232,36 @@ fn generate_inject_helpers(
                 
                 // Set on concrete node
                 // TODO: Do something with old val
-                node.inputs.#arg_name.replace((std::sync::Arc::new(typed_val.clone()), directed::ReevaluationRule::CacheLast));
-            }
-        });
-
-        inject_transparent_out_to_opaque_ref_in_arms.push(quote_spanned! {span=>
-            Some(#clean_arg_name) => {
-                unimplemented!("inject_transparent_out_to_opaque_ref_in_arms");
-                // Share the Arc directly
-                // let output_arc = parent.outputs_mut()
-                //     .get(&output)
-                //     .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?
-                //     .clone();
-
-                // // Verify the type
-                // if !output_arc.is::<#arg_type>() {
-                //     return Err(directed::InjectionError::OutputTypeMismatch(output.clone()));
-                // }
-
-                // // Check if changed
-                // let input_changed = if let Some(inputs) = &node.inputs {
-                //     if let Some((existing_val, _)) = &inputs.#arg_name {
-                //         !std::sync::Arc::ptr_eq(existing_val, &output_arc)
-                //     } else {
-                //         true
-                //     }
-                // } else {
-                //     true
-                // };
-
-                // if input_changed && !node.input_changed() {
-                //     node.set_input_changed(true);
-                // }
-
-                // // Set on concrete node
-                // node.inputs = Some(output_arc);
+                node.inputs.#arg_name.replace((typed_val.clone(), directed::ReevaluationRule::CacheLast));
             }
         });
     }
 
     Ok(quote_spanned! {Span::call_site()=>
-        fn inject_opaque_out(
+        fn inject_move(
             node: &mut directed::Node<#stage_name>,
             parent: &mut Box<dyn directed::AnyNode>,
             output: Option<&'static directed::facet::Field>,
             input: Option<&'static directed::facet::Field>
         ) -> Result<(), directed::InjectionError> {
             match input.map(|input| input.name) {
-                #(#inject_transparent_out_to_owned_in_arms)*
+                #(#inject_move_arms)*
                 _ => return Err(directed::InjectionError::InputNotFound(input))
             }
             Ok(())
         }
 
-        fn inject_transparent_out_to_owned_in(
+        fn inject_clone(
             node: &mut directed::Node<#stage_name>,
             parent: &mut Box<dyn directed::AnyNode>,
             output: Option<&'static directed::facet::Field>,
             input: Option<&'static directed::facet::Field>
         ) -> Result<(), directed::InjectionError> {
             match input.map(|input| input.name) {
-                #(#inject_transparent_out_to_owned_in_arms)*
+                #(#inject_clone_arms)*
                 _ => return Err(directed::InjectionError::InputNotFound(input))
             }
             Ok(())
-        }
-
-        fn inject_transparent_out_to_opaque_ref_in(
-            node: &mut directed::Node<#stage_name>,
-            parent: &mut Box<dyn directed::AnyNode>,
-            output: Option<&'static directed::facet::Field>,
-            input: Option<&'static directed::facet::Field>
-        ) -> Result<(), directed::InjectionError> {
-            unimplemented!("inject_transparent_out_to_opaque_ref_in");
-            // match input.name.as_ref().map(|n| n.as_ref()) {
-            //     #(#inject_transparent_out_to_opaque_ref_in_arms)*
-            //     _ => return Err(directed::InjectionError::InputNotFound(input.clone()))
-            // }
-            // Ok(())
         }
     })
 }
@@ -360,7 +297,6 @@ fn generate_output_handling(
             }
         }
         OutputParams::Implicit(_, span) => {
-            // For implicit outputs, wrap in NodeOutput::Standard
             quote_spanned! {*span=>
                 #output_struct_name(Some(#stage_name::call(#(#state_as_inputs),* #(#arg_names),*) #await_call))
             }
@@ -369,6 +305,7 @@ fn generate_output_handling(
 
     if cache_strategy.0 == CacheStrategy::All {
         Ok(quote_spanned! {cache_strategy.1=>
+
             // Use a hasher
             let hash: u64 = {
                 #[allow(unused_imports)]
@@ -385,37 +322,20 @@ fn generate_output_handling(
             #[allow(unused_variables)]
             let cached = cache.get(&hash).and_then(|cached_vec| {
                 cached_vec.iter().find(|cached| {
-                    inputs.iter().all(|(k, v)| {
-                        cached.inputs.get(k).map(|cached_v| {
-                            std::sync::Arc::ptr_eq(&v.0, cached_v)
-                        }).unwrap_or(false)
-                    })
+                    cached.inputs == *inputs
                 })
             });
 
             if let Some(cached) = cached {
                 // Just use cached values
-                Ok(match cached.outputs.len() {
-                    1 if cached.outputs.contains_key(&directed::node::UNNAMED_OUTPUT_FIELD) => {
-                        directed::NodeOutput::Standard(cached.outputs.get(&directed::node::UNNAMED_OUTPUT_FIELD).unwrap().clone())
-                    }
-                    _ => directed::NodeOutput::Named(cached.outputs.clone())
-                })
+                Ok(cached.outputs.clone())
             } else {
                 // Call and store result in cache
                 let result = #fn_call;
-                let outputs_map = match &result {
-                    directed::NodeOutput::Standard(val) => {
-                        let mut map = std::collections::HashMap::new();
-                        map.insert(directed::node::UNNAMED_OUTPUT_FIELD.clone(), val.clone());
-                        map
-                    }
-                    directed::NodeOutput::Named(map) => map.clone(),
-                };
 
                 let cache_entry = directed::Cached {
-                    inputs: inputs.iter().map(|(k, (v, _))| (k.clone(), v.clone())).collect(),
-                    outputs: outputs_map,
+                    inputs: inputs.clone(),
+                    outputs: result.clone(),
                 };
 
                 cache.entry(hash).or_insert_with(Vec::new).push(cache_entry);
@@ -432,34 +352,35 @@ fn prepare_input_types(config: &StageConfig) -> Result<Vec<proc_macro2::TokenStr
     let args = config
         .inputs
         .iter()
-        .map(|input| (&input.name, &input.clean_name, &input.ref_type));
+        .map(|input| (&input.clean_name, &input.ty, &input.ref_type));
     let mut output = Vec::new();
-    for (arg_name, clean_name, ref_type) in args {
-        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_name);
+    for (arg_name, ty, ref_type) in args {
+        let reeval_name = quote::format_ident!("{}_reevaluation_rule", arg_name);
         match ref_type {
             RefType::Owned => {
                 output.push(quote_spanned!{arg_name.span()=>
-                    let #arg_name = match #reeval_name {
+                    let #arg_name: #ty = match #reeval_name {
                         directed::ReevaluationRule::Move => {
-                            // Parent is opaque, use Arc::into_inner
-                            match std::sync::Arc::into_inner(#arg_name) {
-                                Some(arg) => arg,
-                                None => {return Err(directed::InjectionError::TooManyReferences(stringify!(#arg_name)))}
-                            }
+                            // Parent is opaque
+                            #arg_name
                         },
                         directed::ReevaluationRule::CacheLast | directed::ReevaluationRule::CacheAll => {
                             // Parent is transparent, clone the value
-                            (*#arg_name).clone()
+                            #arg_name.clone()
                         },
                     };
                 });
             }
             RefType::Borrowed => {
                 output.push(quote_spanned! {arg_name.span()=>
-                    let #arg_name = #arg_name.as_ref();
+                    let #arg_name = &#arg_name;
                 });
             }
-            RefType::BorrowedMut => panic!("Mutable refs are not yet supported"),
+            RefType::BorrowedMut => {
+                output.push(quote_spanned! {arg_name.span()=>
+                    let #arg_name = &mut #arg_name;
+                });
+            },
         }
     }
     Ok(output)
@@ -585,10 +506,10 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
     // Create useful structs
     let input_struct_fields =
         proc_macro2::TokenStream::from_iter(config.inputs.iter().map(|input| {
-            let input_ident = syn::Ident::new(&input.clean_name, input.span);
+            let input_ident = &input.clean_name;
             let input_ty = input.unwrapped_type();
             quote_spanned! {input.span=>
-                #input_ident: Option<(std::sync::Arc<#input_ty>, directed::ReevaluationRule)>,
+                #input_ident: Option<(#input_ty, directed::ReevaluationRule)>,
             }
         }));
     let input_struct = quote_spanned! {Span::call_site()=>

@@ -58,7 +58,7 @@ pub(crate) struct InputParam {
     pub(crate) name: syn::Ident,
     pub(crate) ty: syn::Type,
     pub(crate) ref_type: RefType,
-    pub(crate) clean_name: String,
+    pub(crate) clean_name: syn::Ident,
     pub(crate) span: Span,
 }
 
@@ -286,9 +286,9 @@ impl StageConfig {
 
                     let is_unused = arg_name_str.starts_with('_');
                     let clean_name = if is_unused {
-                        arg_name_str[1..].to_string()
+                        syn::Ident::new(&arg_name_str[1..], arg_name.span())
                     } else {
-                        arg_name_str.clone()
+                        arg_name.clone()
                     };
 
                     let ref_type = match &**arg_type {

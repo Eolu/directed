@@ -26,23 +26,8 @@ pub struct Node<S: Stage> {
 /// TODO: handle state as well
 #[derive(Debug, Clone)]
 pub struct Cached<S: Stage> {
-    pub inputs: Arc<S::Input>,
-    pub outputs: Arc<S::Output>,
-}
-
-/// Trait used to downcast and compare equality
-pub trait DowncastEq {
-    fn downcast_eq(&self, other: &dyn Any) -> bool;
-}
-
-impl<T: Any + PartialEq> DowncastEq for T {
-    fn downcast_eq(&self, other: &dyn Any) -> bool {
-        if let Some(other) = other.downcast_ref::<T>() {
-            self == other
-        } else {
-            false
-        }
-    }
+    pub inputs: S::Input,
+    pub outputs: S::Output,
 }
 
 impl<S: Stage> Node<S> {
