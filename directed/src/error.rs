@@ -1,9 +1,8 @@
 //! Errors and the graph trace system
-use crate::{AnyNode, DataLabel, Graph, NodeId, Registry};
-use std::{
-    borrow::Cow,
-    fmt::{self, Display, Formatter, Write},
-};
+use facet::Field;
+
+use crate::{AnyNode, Graph, Registry, registry::NodeReflection};
+use std::fmt::{self, Display, Formatter, Write};
 
 /// Wrapper error type, wraps errors from this crate and stores a graph information with them.
 #[derive(thiserror::Error, Debug)]
@@ -16,13 +15,13 @@ pub struct ErrorWithTrace<T: std::error::Error> {
 #[derive(thiserror::Error, Debug)]
 pub enum InjectionError {
     #[error("Output '{0:?}' not found")]
-    OutputNotFound(DataLabel),
+    OutputNotFound(Option<&'static Field>),
     #[error("Output '{0:?}' type mismatch")]
-    OutputTypeMismatch(DataLabel),
+    OutputTypeMismatch(Option<&'static Field>),
     #[error("Input '{0:?}' not found")]
-    InputNotFound(DataLabel),
+    InputNotFound(Option<&'static Field>),
     #[error("Input '{0:?}' type mismatch")]
-    InputTypeMismatch(DataLabel),
+    InputTypeMismatch(Option<&'static Field>),
     #[error("Input '{name}' type mismatch, expected '{expected}'")]
     InputTypeMismatchDetails {
         name: &'static str,
@@ -75,19 +74,19 @@ pub enum SetInputError {
     #[error(transparent)]
     NodesNotFoundInRegistry(#[from] NodesNotFoundError),
     #[error("{0:?} not found")]
-    InputNotFound(DataLabel),
+    InputNotFound(&'static Field),
     #[error("{0:?} already connected to parent output {1:?}")]
-    InputAlreadyConnected(DataLabel, DataLabel),
+    InputAlreadyConnected(&'static Field, &'static Field),
     #[error("{0:?} incorrect type")]
-    InputTypeMismatch(DataLabel)
+    InputTypeMismatch(&'static Field),
 }
 
 #[derive(thiserror::Error, Debug)]
 #[error("Nodes with id `{0:?}` not found in registry")]
-pub struct NodesNotFoundError(Vec<NodeId>);
+pub struct NodesNotFoundError(Vec<NodeReflection>);
 
-impl From<&[NodeId]> for NodesNotFoundError {
-    fn from(value: &[NodeId]) -> Self {
+impl From<&[NodeReflection]> for NodesNotFoundError {
+    fn from(value: &[NodeReflection]) -> Self {
         Self(Vec::from(value))
     }
 }
@@ -159,13 +158,13 @@ impl std::fmt::Debug for GraphTrace {
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     /// The unique ID of the node.
-    pub id: NodeId,
+    pub id: NodeReflection,
     /// The name of the node.
-    pub name: String,
-    /// The input names of the node.
-    pub inputs: Vec<DataLabel>,
-    /// The output names of the node.
-    pub outputs: Vec<DataLabel>,
+    pub name: &'static str,
+    /// The input fields of the node.
+    pub inputs: &'static [Field],
+    /// The output fields of the node.
+    pub outputs: &'static [Field],
     /// Used for debugging purposes
     pub highlighted: bool,
 }
@@ -174,13 +173,13 @@ pub struct NodeInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionInfo {
     /// The ID of the source node.
-    pub source_id: NodeId,
+    pub source_id: NodeReflection,
     /// The output label of the source node.
-    pub source_output: DataLabel,
+    pub source_output: Option<&'static Field>,
     /// The ID of the target node.
-    pub target_id: NodeId,
+    pub target_id: NodeReflection,
     /// The input label of the target node.
-    pub target_input: DataLabel,
+    pub target_input: Option<&'static Field>,
     /// Used for debugging purposes
     pub highlighted: bool,
 }
@@ -188,8 +187,8 @@ pub struct ConnectionInfo {
 // Extension to Registry to allow access to nodes by ID
 impl Registry {
     /// Gets a node by its ID.
-    pub fn get_node_by_id(&self, id: NodeId) -> Option<&Box<dyn AnyNode>> {
-        self.0.get(id).map(|node| node.as_ref()).flatten()
+    pub fn get_node_by_id(&self, id: NodeReflection) -> Option<&Box<dyn AnyNode>> {
+        self.0.get(id.id).map(|node| node.as_ref()).flatten()
     }
 }
 
@@ -202,11 +201,12 @@ impl Graph {
         // Add node information
         for (&id, _) in &self.node_indices {
             if let Some(node) = registry.get_node_by_id(id) {
+                let stage_shape = node.stage_shape();
                 let node_info = NodeInfo {
                     id,
-                    name: node.stage_name().to_string(),
-                    inputs: node.input_names().collect(),
-                    outputs: node.output_names().collect(),
+                    name: stage_shape.stage_name,
+                    inputs: stage_shape.input_fields(),
+                    outputs: stage_shape.output_fields(),
                     highlighted: false,
                 };
                 nodes.push(node_info);
@@ -232,8 +232,8 @@ impl Graph {
                 .map(|(&id, _)| id);
 
             if let (Some(source_id), Some(target_id)) = (source_id, target_id) {
-                let source_output = edge.weight.source_output.clone();
-                let target_input = edge.weight.target_input.clone();
+                let source_output = edge.weight.source_output;
+                let target_input = edge.weight.target_input;
                 let connection_info = ConnectionInfo {
                     source_id,
                     source_output,
@@ -251,7 +251,7 @@ impl Graph {
 
 impl GraphTrace {
     /// Emphasizes a node in the trace
-    pub fn highlight_node(&mut self, node: NodeId) {
+    pub fn highlight_node(&mut self, node: NodeReflection) {
         if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node) {
             node.highlighted = true;
         }
@@ -260,10 +260,10 @@ impl GraphTrace {
     /// Emphasizes a connection in the trace
     pub fn highlight_connection(
         &mut self,
-        source_node: NodeId,
-        source_output: DataLabel,
-        target_node: NodeId,
-        target_input: DataLabel,
+        source_node: NodeReflection,
+        source_output: Option<&'static Field>,
+        target_node: NodeReflection,
+        target_input: Option<&'static Field>,
     ) {
         if let Some(conn) = self.connections.iter_mut().find(|conn| {
             conn.source_id == source_node
@@ -291,97 +291,69 @@ impl GraphTrace {
         // Create subgraphs for each node with its inputs and outputs
         for node in &self.nodes {
             // Create a subgraph for the node
-            write!(&mut result, "    subgraph Node_{}_", node.id).unwrap();
-            write!(&mut result, "[\"Node {} ({})\"]", node.id, node.name).unwrap();
+            write!(&mut result, "    subgraph Node_{}_", node.id.id).unwrap();
+            write!(&mut result, "[\"Node {} ({})\"]", node.id.id, node.name).unwrap();
             writeln!(&mut result, "").unwrap();
 
             // Define a node for each input port
-            for input in &node.inputs {
-                let type_name = if let Some(type_name) = &input.type_name {
-                    type_name
-                } else {
-                    "?"
-                };
+            for input in node.inputs.iter() {
+                let field_name = input.name;
+                let ty = input.shape.to_string();
                 writeln!(
                     &mut result,
-                    "        {}_in_{}[/\"{}: {type_name}\"\\]",
-                    node.id,
-                    input
-                        .name
-                        .as_ref()
-                        .map(|name| name.replace(SANITIZER, "_"))
-                        .unwrap_or_else(|| "!".into()),
-                    input.name.as_ref().unwrap_or_else(|| &Cow::Borrowed("!"))
+                    "        {}_in_{}[/\"{}: {ty}\"\\]",
+                    node.id.id,
+                    field_name.replace(SANITIZER, "_"),
+                    field_name
                 )
                 .unwrap();
             }
 
             // Define a node for each output port, unless this is a plain node.
-            let has_unnamed_output = node.outputs.len() == 1
-                && "_"
-                    == node.outputs[0]
-                        .name
-                        .as_ref()
-                        .unwrap_or_else(|| &Cow::Borrowed("!"));
-            if !(has_unnamed_output
-                && Some(std::borrow::Cow::Borrowed("()")) == node.outputs[0].type_name)
-            {
-                for output in &node.outputs {
-                    write!(
-                        &mut result,
-                        "        {}_out_{}[\\\"",
-                        node.id,
-                        output
-                            .name
-                            .as_ref()
-                            .map(|name| name.replace(SANITIZER, "_"))
-                            .unwrap_or_else(|| "!".into())
-                    )
-                    .unwrap();
-                    if !has_unnamed_output {
-                        write!(
-                            &mut result,
-                            "{}: ",
-                            output.name.as_ref().unwrap_or_else(|| &Cow::Borrowed("!"))
-                        )
-                        .unwrap();
-                    }
-                    if let Some(type_name) = &output.type_name {
-                        write!(&mut result, "{type_name}").unwrap();
-                    }
-                    writeln!(&mut result, "\"/]").unwrap();
-                }
+            for output in node.outputs.iter() {
+                let field_name = output.name;
+                write!(
+                    &mut result,
+                    "        {}_out_{}[\\\"",
+                    node.id.id,
+                    field_name.replace(SANITIZER, "_")
+                )
+                .unwrap();
+                write!(&mut result, "{}: ", field_name).unwrap();
+                let type_name = &output.shape.to_string();
+                write!(&mut result, "{type_name}").unwrap();
+                writeln!(&mut result, "\"/]").unwrap();
             }
 
             writeln!(&mut result, "    end").unwrap();
             if node.highlighted {
-                writeln!(&mut result, "    style Node_{}_ {EMPHASIS_STYLE}", node.id).unwrap();
+                writeln!(
+                    &mut result,
+                    "    style Node_{}_ {EMPHASIS_STYLE}",
+                    node.id.id
+                )
+                .unwrap();
             }
         }
 
         // Create the connections between nodes
         for (i, conn) in self.connections.iter().enumerate() {
+            let source_name = conn.source_output.map(|n| n.name).unwrap_or("_");
+            let target_name = conn.target_input.map(|n| n.name).unwrap_or("_");
+
             write!(
                 &mut result,
                 "    {}_out_{} ",
-                conn.source_id,
-                conn.source_output
-                    .name
-                    .as_ref()
-                    .map(|name| name.replace(SANITIZER, "_"))
-                    .unwrap_or_else(|| "!".into())
+                conn.source_id.id,
+                source_name.replace(SANITIZER, "_")
             )
             .unwrap();
             write!(&mut result, "--> ").unwrap();
             writeln!(
                 &mut result,
                 "{}_in_{}",
-                conn.target_id,
-                conn.target_input
-                    .name
-                    .as_ref()
-                    .map(|name| name.replace(SANITIZER, "_"))
-                    .unwrap_or_else(|| "!".into())
+                conn.target_id.id,
+                target_name.replace(SANITIZER, "_")
             )
             .unwrap();
 

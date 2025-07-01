@@ -191,9 +191,9 @@ fn TinyStage3(input: String) {
 
 fn main() {
     let mut registry = Registry::new();
-    let node_1 = registry.register(TinyStage1::new());
-    let node_2 = registry.register(TinyStage2::new());
-    let node_3 = registry.register(TinyStage3::new());
+    let node_1 = registry.register(TinyStage1);
+    let node_2 = registry.register(TinyStage2);
+    let node_3 = registry.register(TinyStage3);
 
     // This macro is basic syntax sugar for a few calls.
     let graph = graph! {

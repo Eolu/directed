@@ -1,13 +1,11 @@
-use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
-    sync::Arc,
-};
+use facet::{Facet, Field, Shape};
+use std::{any::Any, collections::HashMap};
 
+#[cfg(not(feature = "tokio"))]
+use crate::DynFields;
 use crate::{
     InjectionError,
     node::{AnyNode, Node},
-    types::{DataLabel, NodeOutput},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
@@ -17,32 +15,98 @@ pub enum RefType {
     BorrowedMut,
 }
 
+impl From<&Field> for RefType {
+    fn from(value: &Field) -> Self {
+        if let facet::Type::Pointer(facet::PointerType::Reference(ty)) = value.shape.ty {
+            if ty.mutable {
+                Self::BorrowedMut
+            } else {
+                Self::Borrowed
+            }
+        } else {
+            Self::Owned
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StageShape {
+    pub stage_name: &'static str,
+    pub inputs: &'static Shape,
+    pub outputs: &'static Shape,
+    pub state: &'static Shape,
+}
+
+impl StageShape {
+    pub(crate) fn input_fields(&self) -> &'static [Field] {
+        match self.inputs.ty {
+            facet::Type::User(user_type) => match user_type {
+                facet::UserType::Struct(struct_type) => struct_type.fields,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn output_fields(&self) -> &'static [Field] {
+        match self.outputs.ty {
+            facet::Type::User(user_type) => match user_type {
+                facet::UserType::Struct(struct_type) => struct_type.fields,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn state_fields(&self) -> &'static [Field] {
+        match self.state.ty {
+            facet::Type::User(user_type) => match user_type {
+                facet::UserType::Struct(struct_type) => struct_type.fields,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub trait SetVal {
+    fn set_val(&mut self, name: &str, val: Box<dyn Any>) -> Box<dyn Any>;
+}
+
 /// Defines all the information about how a stage is handled.
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
-pub trait Stage: Clone {
+pub trait Stage: Clone + 'static {
+    /// Used for reflection
+    const SHAPE: StageShape;
     /// Internal state only, no special rules apply to this. This is stored
     /// as a tuple of all state parameters in order.
-    type State;
+    type State: Facet<'static>;
+    /// TODO: The input of this stage
+    #[cfg(feature = "tokio")]
+    type Input: Send + Sync + Default + DynFields + Facet<'static>;
+    #[cfg(not(feature = "tokio"))]
+    type Input: Send + Sync + Default + DynFields + Facet<'static>;
+    /// TODO: The output of this stage
+    #[cfg(feature = "tokio")]
+    type Output: SetVal + Send + Sync + Default + DynFields + Facet<'static>;
+    #[cfg(not(feature = "tokio"))]
+    type Output: SetVal + Send + Sync + Default + DynFields + Facet<'static>;
 
-    /// Used for typechecking inputs.
-    fn inputs(&self) -> &HashMap<DataLabel, (TypeId, RefType)>;
-    /// Used for typechecking outputs
-    fn outputs(&self) -> &HashMap<DataLabel, TypeId>;
     /// Evaluate the stage with the given input and state
     fn evaluate(
         &self,
         state: &mut Self::State,
-        inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-        cache: &mut HashMap<u64, Vec<crate::Cached>>,
-    ) -> Result<NodeOutput, InjectionError>;
+        inputs: &mut Self::Input,
+        cache: &mut HashMap<u64, Vec<crate::Cached<Self>>>,
+    ) -> Result<Self::Output, InjectionError>;
     /// async version of evaluate
     #[cfg(feature = "tokio")]
     async fn evaluate_async(
         &self,
         state: &mut Self::State,
-        inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
+        inputs: &mut HashMap<Field, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
         cache: &mut HashMap<u64, Vec<crate::Cached>>,
-    ) -> Result<NodeOutput, InjectionError>;
+    ) -> Result<Self::Output, InjectionError>;
 
     fn eval_strategy(&self) -> EvalStrategy {
         EvalStrategy::Lazy
@@ -58,12 +122,9 @@ pub trait Stage: Clone {
         &self,
         node: &mut Node<Self>,
         parent: &mut Box<dyn AnyNode>,
-        output: DataLabel,
-        input: DataLabel,
+        output: Option<&'static Field>,
+        input: Option<&'static Field>,
     ) -> Result<(), InjectionError>;
-
-    /// Stage name, used for debugging information
-    fn name(&self) -> &str;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +136,8 @@ pub enum EvalStrategy {
     Urgent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Facet)]
 pub enum ReevaluationRule {
     /// Always move outputs, reevaluate every time. If the receiving node takes
     /// a reference, it will be pased in, then dropped after that node
