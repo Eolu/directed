@@ -4,17 +4,9 @@ use parse::*;
 use proc_macro::TokenStream;
 use proc_macro_error::proc_macro_error;
 use proc_macro2::Span;
-use proc_macro2_diagnostics::{Diagnostic, SpanDiagnosticExt};
+use proc_macro2_diagnostics::Diagnostic;
 use quote::quote_spanned;
-use syn::{
-    FnArg, ItemFn, Pat, ReturnType, Token, Type, TypeGenerics,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-    punctuated::Punctuated,
-    spanned::Spanned,
-};
-
-// TODO: `inject_input` implementation is unruly and violates DRY in silly ways. It could be simplified a lot.
+use syn::{ItemFn, Token, parse_macro_input};
 
 /// A macro that wraps a function with the standardized interface:
 /// TODO: More in-depth docs here
@@ -27,51 +19,6 @@ pub fn stage(attr: TokenStream, item: TokenStream) -> proc_macro::TokenStream {
     match generate_stage_impl(stage_config) {
         Ok(tokens) => tokens.into(),
         Err(diag) => diag.emit_as_expr_tokens().into(),
-    }
-}
-
-/// This associates the names of function parameters with the TypeId of their type.
-///
-/// Used to build and validate I/O-based connections
-fn generate_input_registrations(
-    inputs: &[InputParam],
-) -> Result<Vec<proc_macro2::TokenStream>, Diagnostic> {
-    Ok(inputs.iter().map(|input| {
-        let arg_name = input.clean_name.to_string();
-        let arg_type = &input.ty;
-        let ref_type = input.ref_type.quoted();
-        let span = input.span.clone();
-        quote_spanned! {span=>
-            inputs.insert(directed::facet::Field::new_with_type_name(#arg_name, stringify!(#arg_type)), (std::any::TypeId::of::<#arg_type>(), #ref_type));
-        }
-    }).collect())
-}
-
-/// This associates the names of function outputs with the TypeId of their type.
-/// When a function returns named outputs, this will associate meaningful
-/// names to each output. When a function returns any other type, this will
-/// simply associate that one type with the name '_'.
-///
-/// Used to build and validate I/O-based connections
-fn generate_output_registrations(
-    outputs: &OutputParams,
-) -> Result<Vec<proc_macro2::TokenStream>, Diagnostic> {
-    match outputs {
-        OutputParams::Explicit(outputs) => {
-            Ok(outputs.iter().map(|output| {
-                let name = output.name.to_string();
-                let ty = &output.ty;
-                let span = &output.span;
-                quote_spanned! {*span=>
-                    outputs.insert(directed::facet::Field::new_with_type_name(#name, stringify!(#ty)), std::any::TypeId::of::<#ty>());
-                }
-            }).collect())
-        },
-        OutputParams::Implicit(ty, span) => {
-            Ok(vec![quote_spanned! {*span=>
-                outputs.insert(directed::facet::Field::new_with_type_name("_", stringify!(#ty)), std::any::TypeId::of::<#ty>());
-            }])
-        },
     }
 }
 
@@ -238,6 +185,8 @@ fn generate_inject_helpers(
     }
 
     Ok(quote_spanned! {Span::call_site()=>
+
+        #[allow(unreachable_code)]
         fn inject_move(
             node: &mut directed::Node<#stage_name>,
             parent: &mut Box<dyn directed::AnyNode>,
@@ -251,6 +200,7 @@ fn generate_inject_helpers(
             Ok(())
         }
 
+        #[allow(unreachable_code)]
         fn inject_clone(
             node: &mut directed::Node<#stage_name>,
             parent: &mut Box<dyn directed::AnyNode>,
@@ -275,7 +225,7 @@ fn generate_output_handling(
     let arg_names = config
         .inputs
         .iter()
-        .map(|input| &input.name)
+        .map(|input| &input.clean_name)
         .collect::<Vec<_>>();
     let state_as_inputs = config
         .states
@@ -555,32 +505,6 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
         })),
     };
 
-    let set_val_output_fn = match &config.outputs {
-        OutputParams::Explicit(output_params) => {
-            let fields = output_params.iter().map(|param| {
-                let name = &param.name;
-                let name_str = name.to_string();
-                let ty = &param.ty;
-                let span = param.span;
-
-                quote_spanned! {Span::mixed_site()=>
-                    #name_str => Box::new(self.#name.replace(*val.downcast::<#ty>().unwrap())) as Box<dyn std::any::Any>
-                }
-            });
-            quote_spanned! {Span::mixed_site()=> fn set_val(&mut self, name: &str, val: Box<dyn std::any::Any>) -> Box<dyn std::any::Any> {
-                match name {
-                    #(#fields,)*
-                    unknown => unreachable!("Unknown output field: {}", unknown)
-                }
-            }}
-        }
-        OutputParams::Implicit(ty, span) => {
-            quote_spanned! {Span::mixed_site()=> fn set_val(&mut self, _name: &str, val: Box<dyn std::any::Any>) -> Box<dyn std::any::Any> {
-                Box::new(self.0.replace(*val.downcast::<#ty>().unwrap())) as Box<dyn std::any::Any>
-            }}
-        }
-    };
-
     let state_struct_fields =
         proc_macro2::TokenStream::from_iter(states.iter().map(|(state_ident, ty, span)| {
             let state_ty = &ty;
@@ -588,17 +512,20 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 #state_ident: #state_ty,
             }
         }));
+    // If state is a unit, implement default
+    let default_derive = if config.states.is_empty() {
+        quote_spanned! { Span::call_site()=> #[derive(Default)] }
+    } else {
+        quote::quote!{}
+    };
     let state_struct = quote_spanned! {Span::call_site()=>
-        // TODO: Default derive is unnnecessarily limiting here, need to temporarily 'tuple-fy' the state
-        #[derive(Default, crate::facet::Facet)]
+        #default_derive
         #fn_vis struct #state_struct_name {
             #state_struct_fields
         }
     };
 
     // Generate code sections
-    let input_registrations = generate_input_registrations(&config.inputs)?;
-    let output_registrations = generate_output_registrations(&config.outputs)?;
     let extraction_code = generate_extraction_code(&config.inputs, config.cache_strategy)?;
     let injection_code = input_injection(stage_name, &config.inputs)?;
     let prepare_input_types_code = prepare_input_types(&config)?;
@@ -634,7 +561,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
     };
     let call_fn_def = quote::quote! {
         #(#fn_attrs)*
-        #async_status fn call(#(#state_as_input),* #original_args) #return_type #original_body
+        #async_status fn call(#(#state_as_input,)* #original_args) #return_type #original_body
     };
 
     // Slap together eval logic
@@ -670,10 +597,6 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
         #output_struct
         #state_struct
 
-        impl directed::SetVal for #output_struct_name {
-            #set_val_output_fn
-        }
-
         impl directed::DynFields for #output_struct_name {
             #output_dyn_fields_trait_impl
 
@@ -696,7 +619,6 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 stage_name: #stage_name_str,
                 inputs: Self::Input::SHAPE,
                 outputs: Self::Output::SHAPE,
-                state: Self::State::SHAPE,
             };
             type Input = #input_struct_name;
             type Output = #output_struct_name;
@@ -716,7 +638,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 &self,
                 state: &mut Self::State,
                 inputs: &mut Self::Input,
-                cache: &mut std::collections::HashMap<u64, Vec<crate::Cached>>,
+                cache: &mut std::collections::HashMap<u64, Vec<crate::Cached<Self>>>,
             ) -> Result<Self::Output, InjectionError> {
                 #async_eval_logic
             }

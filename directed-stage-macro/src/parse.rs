@@ -1,12 +1,9 @@
 use proc_macro2::Span;
-use quote::quote_spanned;
 use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned,
 };
-
-// TODO: Generate cleanup needed here
 
 // Configuration structs
 #[derive(Clone)]
@@ -28,18 +25,6 @@ pub(crate) enum RefType {
     BorrowedMut,
 }
 
-impl RefType {
-    pub(crate) fn quoted(&self) -> proc_macro2::TokenStream {
-        match self {
-            RefType::Owned => quote_spanned! {Span::call_site()=> directed::RefType::Owned },
-            RefType::Borrowed => quote_spanned! {Span::call_site()=> directed::RefType::Borrowed },
-            RefType::BorrowedMut => {
-                quote_spanned! {Span::call_site()=> directed::RefType::BorrowedMut }
-            }
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) enum OutputParams {
     Explicit(Vec<OutputParam>),
@@ -55,7 +40,6 @@ pub(crate) struct OutputParam {
 
 #[derive(Clone)]
 pub(crate) struct InputParam {
-    pub(crate) name: syn::Ident,
     pub(crate) ty: syn::Type,
     pub(crate) ref_type: RefType,
     pub(crate) clean_name: syn::Ident,
@@ -96,13 +80,13 @@ impl Param for &OutputParam {
 
 impl Param for InputParam {
     fn param(&self) -> (syn::Member, &syn::Type, &Span) {
-        (self.name.clone().into(), &self.ty, &self.span)
+        (self.clean_name.clone().into(), &self.ty, &self.span)
     }
 }
 
 impl Param for &InputParam {
     fn param(&self) -> (syn::Member, &syn::Type, &Span) {
-        (self.name.clone().into(), &self.ty, &self.span)
+        (self.clean_name.clone().into(), &self.ty, &self.span)
     }
 }
 
@@ -302,7 +286,6 @@ impl StageConfig {
                     };
 
                     result.push(InputParam {
-                        name: arg_name.clone(),
                         ty: *arg_type.clone(),
                         ref_type,
                         clean_name,

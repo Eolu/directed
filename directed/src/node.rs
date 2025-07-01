@@ -47,7 +47,7 @@ impl<S: Stage> Node<S> {
 /// use this, but there should be no reason anyone should manually implement
 /// this.
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
-pub trait AnyNode: Any + Send + 'static {
+pub trait AnyNode: Any + Send + Sync + 'static {
     /// Gets the shape of the stage
     fn stage_shape(&self) -> &'static StageShape;
     /// Upcast to `dyn Any` to get its more-specific downcast capabilities
@@ -59,7 +59,7 @@ pub trait AnyNode: Any + Send + 'static {
     /// Evaluates the node. Returns a map of prior outputs
     fn eval(&mut self) -> Result<Box<dyn DynFields>, InjectionError>;
     #[cfg(feature = "tokio")]
-    async fn eval_async(&mut self) -> Result<Arc<dyn Any + Send + Sync>, InjectionError>;
+    async fn eval_async(&mut self) -> Result<Box<dyn DynFields + Send + Sync>, InjectionError>;
     fn eval_strategy(&self) -> EvalStrategy;
     fn reeval_rule(&self) -> ReevaluationRule;
     /// This a a core part of the plumbing of this crate - take the outputs of
@@ -82,9 +82,7 @@ pub trait AnyNode: Any + Send + 'static {
 }
 
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
-impl<S: Stage + Send + 'static> AnyNode for Node<S>
-where
-    S::State: Send,
+impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
 {
     fn stage_shape(&self) -> &'static StageShape {
         &S::SHAPE
@@ -122,30 +120,16 @@ where
     }
 
     #[cfg(feature = "tokio")]
-    async fn eval_async(
-        &mut self,
-    ) -> Result<HashMap<Field, Arc<dyn Any + Send + Sync>>, InjectionError> {
-        let mut old_outputs = HashMap::new();
+    async fn eval_async(&mut self) -> Result<Box<dyn DynFields + Send + Sync>, InjectionError> {
         let outputs = self
             .stage
             .evaluate_async(&mut self.state, &mut self.inputs, &mut self.cache)
             .await?;
-
-        match outputs {
-            NodeOutput::Standard(val) => {
-                if let Some(old_output) = self.replace_output(&UNNAMED_OUTPUT_FIELD, val)? {
-                    old_outputs.insert(UNNAMED_OUTPUT_FIELD.clone(), old_output);
-                }
-            }
-            NodeOutput::Named(hash_map) => {
-                for (key, val) in hash_map.into_iter() {
-                    if let Some(old_output) = self.replace_output(&key, val)? {
-                        old_outputs.insert(key, old_output);
-                    }
-                }
-            }
+        if let Some(out_mut) = self.outputs_mut() {
+            Ok(out_mut.replace(Box::new(outputs)))
+        } else {
+            panic!("TODO: Handle this");
         }
-        Ok(old_outputs)
     }
 
     fn flow_data(
@@ -179,7 +163,19 @@ where
 }
 
 /// Trait to abstract over accessing and taking outputs from nodes
+#[cfg(not(feature = "tokio"))]
 pub trait DynFields: Any {
+    fn field<'a>(&'a self, field: Option<&'static Field>) -> Option<&'a (dyn Any + 'static)>;
+    fn field_mut<'a>(
+        &'a mut self,
+        field: Option<&'static Field>,
+    ) -> Option<&'a mut (dyn Any + 'static)>;
+    fn take_field(&mut self, field: Option<&'static Field>) -> Option<Box<dyn Any>>;
+    fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
+}
+
+#[cfg(feature = "tokio")]
+pub trait DynFields: Any + Send + Sync {
     fn field<'a>(&'a self, field: Option<&'static Field>) -> Option<&'a (dyn Any + 'static)>;
     fn field_mut<'a>(
         &'a mut self,

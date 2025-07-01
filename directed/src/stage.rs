@@ -1,7 +1,6 @@
 use facet::{Facet, Field, Shape};
-use std::{any::Any, collections::HashMap};
+use std::collections::HashMap;
 
-#[cfg(not(feature = "tokio"))]
 use crate::DynFields;
 use crate::{
     InjectionError,
@@ -20,7 +19,6 @@ pub struct StageShape {
     pub stage_name: &'static str,
     pub inputs: &'static Shape,
     pub outputs: &'static Shape,
-    pub state: &'static Shape,
 }
 
 impl StageShape {
@@ -43,20 +41,6 @@ impl StageShape {
             _ => unreachable!(),
         }
     }
-
-    pub(crate) fn state_fields(&self) -> &'static [Field] {
-        match self.state.ty {
-            facet::Type::User(user_type) => match user_type {
-                facet::UserType::Struct(struct_type) => struct_type.fields,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-
-pub trait SetVal {
-    fn set_val(&mut self, name: &str, val: Box<dyn Any>) -> Box<dyn Any>;
 }
 
 /// Defines all the information about how a stage is handled.
@@ -66,17 +50,20 @@ pub trait Stage: Clone + 'static {
     const SHAPE: StageShape;
     /// Internal state only, no special rules apply to this. This is stored
     /// as a tuple of all state parameters in order.
-    type State: Facet<'static>;
+    #[cfg(not(feature = "tokio"))]
+    type State;
+    #[cfg(feature = "tokio")]
+    type State: Send + Sync;
     /// TODO: The input of this stage
     #[cfg(feature = "tokio")]
     type Input: Send + Sync + Default + DynFields + Facet<'static>;
     #[cfg(not(feature = "tokio"))]
-    type Input: Send + Sync + Default + DynFields + Facet<'static>;
+    type Input: Default + DynFields + Facet<'static>;
     /// TODO: The output of this stage
     #[cfg(feature = "tokio")]
-    type Output: SetVal + Send + Sync + Default + DynFields + Facet<'static>;
+    type Output: Send + Sync + Default + DynFields + Facet<'static>;
     #[cfg(not(feature = "tokio"))]
-    type Output: SetVal + Send + Sync + Default + DynFields + Facet<'static>;
+    type Output: Default + DynFields + Facet<'static>;
 
     /// Evaluate the stage with the given input and state
     fn evaluate(
@@ -90,8 +77,8 @@ pub trait Stage: Clone + 'static {
     async fn evaluate_async(
         &self,
         state: &mut Self::State,
-        inputs: &mut HashMap<Field, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-        cache: &mut HashMap<u64, Vec<crate::Cached>>,
+        inputs: &mut Self::Input,
+        cache: &mut HashMap<u64, Vec<crate::Cached<Self>>>,
     ) -> Result<Self::Output, InjectionError>;
 
     fn eval_strategy(&self) -> EvalStrategy {

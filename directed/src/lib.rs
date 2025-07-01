@@ -12,7 +12,7 @@ pub use facet;
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
-pub use stage::{EvalStrategy, ReevaluationRule, RefType, SetVal, Stage, StageShape};
+pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage, StageShape};
 
 /// Simple macro to simulate a function that can return multiple names outputs
 #[macro_export]
@@ -37,48 +37,6 @@ macro_rules! state {
 /// A simple alias to work around a lack of knowledge in certain contexts.
 /// See: https://github.com/rust-lang/rust/issues/86935
 pub type TypeAlias<T> = T;
-
-// TODO: Remove this, here to make the IDE complain
-// #[test]
-// fn basic_macro_test() {
-//     extern crate self as directed;
-//     use directed_stage_macro::stage;
-//     use directed::facet::Facet;
-
-//     #[stage(lazy, cache_last)]
-//     fn TinyStage1() -> String {
-//         println!("Running stage 1");
-//         String::from("This is the output!")
-//     }
-
-//     #[stage(lazy, cache_last)]
-//     fn TinyStage2(input: String, input2: String) -> String {
-//         println!("Running stage 2");
-//         input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
-//     }
-
-//     #[stage(cache_last)]
-//     fn TinyStage3(input: String) {
-//         println!("Running stage 3");
-//         assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
-//     }
-
-//     let mut registry = Registry::new();
-//     let node_1 = registry.register(TinyStage1);
-//     let node_2 = registry.register(TinyStage2);
-//     let node_3 = registry.register(TinyStage3);
-//     let graph = graph! {
-//         nodes: (node_1, node_2, node_3),
-//         connections: {
-//             node_1 => node_2: input,
-//             node_1 => node_2: input2,
-//             node_2 => node_3: input,
-//         }
-//     }
-//     .unwrap();
-
-//     graph.execute(&mut registry).unwrap();
-// }
 
 #[cfg(test)]
 mod tests {
@@ -460,7 +418,7 @@ mod tests {
 
         // TODO: Allow an underscore in name!
         #[stage]
-        fn IntegerConsumer(input: i32) {
+        fn IntegerConsumer(_input: i32) {
             // This should never execute due to type mismatch
             panic!("Should not execute");
         }
@@ -487,7 +445,7 @@ mod tests {
     #[test]
     fn missing_input_test() {
         #[stage]
-        fn ConsumerStage(input1: i32, input2: String) {
+        fn ConsumerStage(_input1: i32, _input2: String) {
             // This should never execute due to missing input
             panic!("Should not execute");
         }
@@ -786,6 +744,7 @@ mod tests {
 mod async_tests {
     extern crate self as directed;
     use super::*;
+    use super::facet::Facet;
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -821,9 +780,9 @@ mod async_tests {
         }
 
         let mut registry = Registry::new();
-        let stage1 = registry.register_with_state(SlowStage1::new(), (tx1, rx2));
-        let stage2 = registry.register_with_state(SlowStage2::new(), (tx2, rx1));
-        let combine = registry.register(CombineStage::new());
+        let stage1 = registry.register_with_state(SlowStage1, state!(SlowStage1 { tx: tx1, rx: rx2 }));
+        let stage2 = registry.register_with_state(SlowStage2, state!(SlowStage2 { tx: tx2, rx: rx1 }));
+        let combine = registry.register(CombineStage);
 
         let graph = graph! {
             nodes: (stage1, stage2, combine),

@@ -322,7 +322,7 @@ impl Graph {
             // Determine if we need to evaluate
             registry.take_node(node_id).ok_or_else(|| {
                 ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
-                    &[node_id] as &[NodeId],
+                    &[node_id.into()] as &[NodeReflection],
                 )))
                 .with_trace(top_trace)
             })?

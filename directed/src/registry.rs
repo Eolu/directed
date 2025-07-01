@@ -119,9 +119,9 @@ impl Registry {
     /// Add a node to the registry. This returns a unique identifier for that
     /// node, which can be used to add it to a [crate::Graph]. This uses default
     /// state
-    pub fn register<S: Stage + Send + 'static>(&mut self, stage: S) -> NodeId<S>
+    pub fn register<S: Stage + Send + Sync + 'static>(&mut self, stage: S) -> NodeId<S>
     where
-        S::State: Default + Send,
+        S::State: Default,
     {
         let next = self.0.len();
         self.0
@@ -134,13 +134,11 @@ impl Registry {
     ///
     /// [crate::stage::Stage::State] is taken as a tuple of all the state
     /// parameters in the order they were defined.
-    pub fn register_with_state<S: Stage + Send + 'static>(
+    pub fn register_with_state<S: Stage + Send + Sync + 'static>(
         &mut self,
         stage: S,
         state: S::State,
     ) -> NodeId<S>
-    where
-        S::State: Send,
     {
         let next = self.0.len();
         self.0.push(Some(Box::new(Node::new(stage, state))));
