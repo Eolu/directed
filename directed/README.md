@@ -32,7 +32,7 @@ When possible, the error types in this crate contain a trace of the graph and ha
 
 ## Current project status
 
-- WIP: Things work but quite a few key features are yet to be implemented, and a lot of cleanup/refactoring is still ongoing.
+- A significant rewrite is almost complete. 0.2 is coming soon and will be a much more mature verison of this crate.
 
 ## Core API Concepts
 

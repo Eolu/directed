@@ -1,6 +1,6 @@
 [package]
 name = "directed"
-version = "0.1.17"
+version = "0.2.0"
 edition = "2024"
 description = "Evaluate programs based on Directed Acyclic Graphs"
 license = "MIT"
@@ -14,7 +14,7 @@ documentation = "https://docs.rs/directed"
 tokio = ["dep:tokio", "dep:async-recursion", "dep:async-trait"]
 
 [dependencies]
-directed-stage-macro = { version = "0.1.8", path = "../directed-stage-macro" }
+directed-stage-macro = { version = "0.2.0", path = "../directed-stage-macro" }
 daggy = "0.9"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"], optional = true }
