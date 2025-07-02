@@ -115,7 +115,7 @@ fn input_injection(
     Ok(quote_spanned! {Span::call_site()=>
         #inject_helpers
 
-        let result: Result<(), directed::error::InjectionError> = match input.map(|input| input.name) {
+        let result: Result<(), directed::InjectionError> = match input.map(|input| input.name) {
             #(#match_arms)*
         };
         result
@@ -139,7 +139,6 @@ fn generate_inject_helpers(
             Some(#clean_arg_name) => {
                 // For opaque parent, we need to remove the output
                 let output_val = parent.outputs_mut()
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?
                     .take_field(output.clone())
                     .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
 
@@ -158,7 +157,6 @@ fn generate_inject_helpers(
             Some(#clean_arg_name) => {
                 // For transparent parent, clone the output
                 let output_val = parent.outputs_mut()
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?
                     .field_mut(output.clone())
                     .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
 
@@ -628,7 +626,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 &self,
                 state: &mut Self::State,
                 inputs: &mut Self::Input,
-                cache: &mut std::collections::HashMap<u64, Vec<crate::Cached<Self>>>,
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<Self>>>,
             ) -> Result<Self::Output, InjectionError> {
                 #sync_eval_logic
             }
@@ -638,7 +636,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 &self,
                 state: &mut Self::State,
                 inputs: &mut Self::Input,
-                cache: &mut std::collections::HashMap<u64, Vec<crate::Cached<Self>>>,
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<Self>>>,
             ) -> Result<Self::Output, InjectionError> {
                 #async_eval_logic
             }

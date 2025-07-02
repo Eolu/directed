@@ -22,13 +22,6 @@ pub enum InjectionError {
     InputNotFound(Option<&'static Field>),
     #[error("Input '{0:?}' type mismatch")]
     InputTypeMismatch(Option<&'static Field>),
-    #[error("Input '{name}' type mismatch, expected '{expected}'")]
-    InputTypeMismatchDetails {
-        name: &'static str,
-        expected: &'static str,
-    },
-    #[error("Unexpected references alive for `{0}`")]
-    TooManyReferences(&'static str),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -67,18 +60,6 @@ pub enum EdgeCreationError {
 pub struct NodeTypeMismatchError {
     pub got: std::any::TypeId,
     pub expected: std::any::TypeId,
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum SetInputError {
-    #[error(transparent)]
-    NodesNotFoundInRegistry(#[from] NodesNotFoundError),
-    #[error("{0:?} not found")]
-    InputNotFound(&'static Field),
-    #[error("{0:?} already connected to parent output {1:?}")]
-    InputAlreadyConnected(&'static Field, &'static Field),
-    #[error("{0:?} incorrect type")]
-    InputTypeMismatch(&'static Field),
 }
 
 #[derive(thiserror::Error, Debug)]

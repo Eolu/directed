@@ -74,7 +74,7 @@ impl Registry {
 
     /// Get a reference to the state of a specific node.
     pub fn state<S: Stage + 'static>(&self, id: NodeId<S>) -> Result<&S::State, RegistryError> {
-        self.validate_node_type::<S>((&id).into())?;
+        self.validate_node_type::<S>(&id)?;
         match self.0.get(id.0) {
             Some(Some(any_node)) => match any_node.as_any().downcast_ref::<Node<S>>() {
                 Some(node) => Ok(&node.state),
@@ -96,7 +96,7 @@ impl Registry {
         &mut self,
         id: NodeId<S>,
     ) -> Result<&mut S::State, RegistryError> {
-        self.validate_node_type::<S>((&id).into())?;
+        self.validate_node_type::<S>(&id)?;
         match self.0.get_mut(id.0) {
             Some(Some(any_node)) => {
                 let node_type_id = any_node.type_id();
@@ -149,8 +149,9 @@ impl Registry {
     /// of the specified type with the given id.
     pub fn validate_node_type<S: Stage + 'static>(
         &self,
-        id: NodeReflection,
+        id: impl Into<NodeReflection>,
     ) -> Result<(), RegistryError> {
+        let id = id.into();
         match self.0.get(id.id) {
             Some(Some(node)) => match node.as_any().downcast_ref::<Node<S>>() {
                 Some(_) => Ok(()),
@@ -191,18 +192,29 @@ impl Registry {
     }
 
     /// Remove a node from the registry and drop it.
-    pub fn unregister_and_drop<S: Stage + 'static>(
+    pub fn unregister_and_drop(
         &mut self,
-        id: NodeId<S>,
+        id: impl Into<NodeReflection>,
     ) -> Result<(), RegistryError> {
-        match self.0.get_mut(id.0).take().map(drop) {
+        let id = id.into();
+        match self.0.get_mut(id.id).take().map(drop) {
             Some(_) => Ok(()),
             None => Err(NodesNotFoundError::from(&[id.into()] as &[NodeReflection]).into()),
         }
     }
 
+    /// Get a node
+    pub fn get_node<S: Stage + 'static>(&self, id: NodeId<S>) -> Option<&Node<S>> {
+        match self.0.get(id.0) {
+            Some(Some(node)) => node.as_any().downcast_ref(),
+            // TODO: Handle Some(None) as a special case, as this means the node is busy
+            Some(None) => None,
+            None => None,
+        }
+    }
+
     /// Get a type-erased node
-    pub fn get(&self, id: impl Into<NodeReflection>) -> Option<&Box<dyn AnyNode>> {
+    pub fn get_node_any(&self, id: impl Into<NodeReflection>) -> Option<&Box<dyn AnyNode>> {
         match self.0.get(id.into().id) {
             Some(Some(node)) => Some(node),
             // TODO: Handle Some(None) as a special case, as this means the node is busy
@@ -211,8 +223,18 @@ impl Registry {
         }
     }
 
+    /// Get a mutable node
+    pub fn get_node_mut<S: Stage + 'static>(&mut self, id: NodeId<S>) -> Option<&mut Node<S>> {
+        match self.0.get_mut(id.0) {
+            Some(Some(node)) => node.as_any_mut().downcast_mut(),
+            // TODO: Handle Some(None) as a special case, as this means the node is busy
+            Some(None) => None,
+            None => None,
+        }
+    }
+
     /// Get a mutable type-erased node
-    pub fn get_mut(&mut self, id: impl Into<NodeReflection>) -> Option<&mut Box<dyn AnyNode>> {
+    pub fn get_node_any_mut(&mut self, id: impl Into<NodeReflection>) -> Option<&mut Box<dyn AnyNode>> {
         match self.0.get_mut(id.into().id) {
             Some(Some(node)) => Some(node),
             // TODO: Handle Some(None) as a special case, as this means the node is busy
@@ -227,7 +249,7 @@ impl Registry {
     /// to be modified together.
     ///
     /// This function will panic if id0 and id1 are the same.
-    pub fn get2_mut(
+    pub fn get2_nodes_any_mut(
         &mut self,
         id0: NodeReflection,
         id1: NodeReflection,
@@ -292,8 +314,27 @@ impl Registry {
 
     /// Insert a node with the given ID back into the registry. Panics
     /// if the node never existed at that ID in the first place.
-    // TODO: This could be a more friendly error
     pub fn replace_node(&mut self, id: NodeReflection, node: Box<dyn AnyNode>) {
         *self.0.get_mut(id.id).unwrap() = Some(node);
+    }
+
+    /// Gets a reference to the inputs from a node
+    pub fn get_inputs<S: Stage + 'static>(&self, node_id: NodeId<S>) -> Option<&S::Input> {
+        self.get_node(node_id).map(|node| &node.inputs)
+    }
+
+    /// Gets a mutable reference to the inputs from a node
+    pub fn get_inputs_mut<S: Stage + 'static>(&mut self, node_id: NodeId<S>) -> Option<&mut S::Input> {
+        self.get_node_mut(node_id).map(|node| &mut node.inputs)
+    }
+
+    /// Gets a reference to the outputs from a node
+    pub fn get_outputs<S: Stage + 'static>(&self, node_id: NodeId<S>) -> Option<&S::Output> {
+        self.get_node(node_id).map(|node| &node.outputs)
+    }
+
+    /// Gets a mutable reference to the outputs from a node
+    pub fn get_outputs_mut<S: Stage + 'static>(&mut self, node_id: NodeId<S>) -> Option<&mut S::Output> {
+        self.get_node_mut(node_id).map(|node| &mut node.outputs)
     }
 }

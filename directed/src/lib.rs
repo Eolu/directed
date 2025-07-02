@@ -8,7 +8,7 @@ mod stage;
 // TODO: Separate out internal-only interfaces
 pub use directed_stage_macro::stage;
 pub use error::*;
-pub use facet;
+pub use facet::{self, Facet};
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
@@ -30,7 +30,7 @@ macro_rules! output {
 #[macro_export]
 macro_rules! state {
     ($stage:ident { $($name:ident $(: $val:expr)?),* }) => {
-        TypeAlias::<<$stage as directed::stage::Stage>::State> { $( $name $(: $val)?, )* }
+        TypeAlias::<<$stage as directed::Stage>::State> { $( $name $(: $val)?, )* }
     };
 }
 
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn multiple_output_stage_test() {
         #[stage(out(number: i32, text: String))]
-        fn MultiOutputStage() {
+        fn MultiOutputStage() -> _ {
             let value1 = 42;
             let value2 = String::from("Hello");
             output! {
@@ -382,20 +382,20 @@ mod tests {
         let node_id = registry.register(SimpleStage);
 
         // Validate node type
-        registry.validate_node_type::<SimpleStage>(node_id.into()).unwrap();
+        registry.validate_node_type::<SimpleStage>(node_id).unwrap();
 
         // Validate incorrect type
         #[stage]
         fn OtherStage() -> String {
             "hello".to_string()
         }
-        assert!(registry.validate_node_type::<OtherStage>(node_id.into()).is_err());
+        assert!(registry.validate_node_type::<OtherStage>(node_id).is_err());
 
         // Get node
-        assert!(registry.get(node_id).is_some());
+        assert!(registry.get_node_any(node_id).is_some());
 
         // Get mutable node
-        assert!(registry.get_mut(node_id).is_some());
+        assert!(registry.get_node_any_mut(node_id).is_some());
 
         // Unregister
         let node = registry
@@ -405,7 +405,7 @@ mod tests {
         assert!(node.stage.eval_strategy() == EvalStrategy::Urgent);
 
         // Node no longer exists
-        assert!(registry.get(node_id).is_none());
+        assert!(registry.get_node_any(node_id).is_none());
     }
 
     // Test type mismatches in connections
@@ -604,10 +604,10 @@ mod tests {
         let node_a = registry.register(StageA);
 
         // Correct type validation should succeed
-        assert!(registry.validate_node_type::<StageA>(node_a.into()).is_ok());
+        assert!(registry.validate_node_type::<StageA>(node_a).is_ok());
 
         // Incorrect type validation should fail
-        assert!(registry.validate_node_type::<StageB>(node_a.into()).is_err());
+        assert!(registry.validate_node_type::<StageB>(node_a).is_err());
 
         // Unregistering with incorrect type should fail
         assert!(registry.unregister::<StageB>(node_a.into()).is_err());

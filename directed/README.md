@@ -28,8 +28,6 @@ flowchart TB
     linkStyle 3 stroke:yellow,stroke-width:3;
 ```
 
-When possible, the error types in this crate contain a trace of the graph and have the ability to generate a mermaid graph like the above, highlighting areas relevant to the error output. These can be placed into markdown or into an [online viewer](https://mermaid.live/). 
-
 ## Current project status
 
 - A significant rewrite is almost complete. 0.2 is coming soon and will be a much more mature verison of this crate.
@@ -51,13 +49,13 @@ fn SimpleStage() -> String {
 ```
 
 #### Multi-output
-Stages can support multiple named outputs by making use of the `NodeOutput` type and the `output` macro. This can be used to make connections between specific outputs of one node to specific inputs of another:
+Stages can support multiple named outputs by making use of `out` sttribute and the `output` macro. This can be used to make connections between specific outputs of one node to specific inputs of another:
 ```rust
 use directed::*;
 
 // When multiple outputs exist, they must be specified within 'out'. Syntax is siumilar to typical input arguments.
 #[stage(out(output1: u32, output2: String))]
-fn MultiOutputStage() -> NodeOutput {
+fn MultiOutputStage() -> _ {
     let output2 = String::from("Hello graph!");
     output! {
         output1: 42,
@@ -68,7 +66,7 @@ fn MultiOutputStage() -> NodeOutput {
 ```
 
 #### Lazy
-Stages can be annotated as `lazy`. This will indicate that it's node will never be evaluated until a child node needs its output to evaluate. Typical graphs will have multiple lazy nodes, and one or possibly a few non-lazy nodes. A graph with only lazy nodes will do nothing at all:
+Stages can be annotated as `lazy`. This will indicate that its node will never be evaluated until a child node needs its output to evaluate. Typical graphs will have multiple lazy nodes, and one or possibly a few non-lazy nodes. A graph with only lazy nodes will do nothing at all:
 ```rust
 use directed::*;
 
@@ -92,8 +90,7 @@ fn CacheLastStage(num: u32) -> String {
 
 Preconditions:
 - All inputs must be `PartialEq` (compile-time error if condition is not met)
-- All inputs must be `Clone` (compile-time error if condition is not met)
-- Outputs must be `Clone` UNLESS all connected child nodes take input only by reference (runtime error if neither of these conditions are met)
+- All inputs and outputs must be `Clone` (compile-time error if condition is not met)
 
 #### Cache All
 Stages can be annotated with `cache_all`. This means that for any previously identical input, return the associated output without reevaluating.
@@ -104,7 +101,7 @@ Preconditions:
 
 #### State
 
-Stages can be annotated with `state`. This will indicate a type that can be used to store internal state for the node. This could also be used to store some kind of configuration for the node that might be modified outside the graph's evaluation time. State is never accessed by other nodes or transferred throughout the graph in any way:
+Stages can be annotated with `state`. This will indicate fields that can be used to store internal state for the node. This could also be used to store some kind of configuration for the node that might be modified outside the graph's evaluation time. State is never accessed by other nodes or transferred throughout the graph in any way. Fields are always accessible as `&mut` references within the body of the stage:
 ```rust
 use directed::*;
 
@@ -122,12 +119,14 @@ fn StatefulStage() -> String {
 }
 ```
 
+See the [#Node State]() section for details on how to initlialize the state.
+
 It is possible to access or mutate state outside of graph evaluation. See the `Registry` section for more details.
 
 ### Registry
 
 A `Registry` stores nodes and their state. It's distinctly seperate from `Graph` itself which just stores information on how nodes are connected. This come swith a few benefits:
-- Any number of distinct `Graph`s can be created for a single `Registry`. Node state can be reused to evaluate a single graph or among distinct graphs.
+- Any number of distinct `Graph`s can be created for a single `Registry`. Node state (including cached inputs and outputs) can be reused to evaluate a single graph or among distinct graphs.
 - To evaluate a graph, an `&mut Registry` is passed in. Graphs don't take exclusive ownership of the registry, and are thus stateless.
 
 Here's an example of creating a registry and adding nodes to it:
@@ -141,24 +140,25 @@ fn SimpleStage() -> String {
 
 fn main() {
     let mut registry = Registry::new();
-    // This returns a simple incremented integer ID, which can be used to lookup the node in the registry.
-    let node_1 = registry.register(SimpleStage::new());
+    // This returns a NodeId, which can be used to lookup the node in the registry.
+    let node_1 = registry.register(SimpleStage);
 }
 ```
 
 ### Node State
 
-As mentioned in the `Stage` section, nodes can have internal state. When creating a node, the following methods is provided:
+As mentioned in the `Stage` section, nodes can have internal state. When creating a node, the following method is provided:
 ```rust,ignore
 let mut registry = Registry::new();
-let node_1 = registry.register_with_state(StatefulStage::new(), SomeState { num_times_run: 0 });
+let node_1 = registry.register_with_state(StatefulStage, state!(StatefulStage { num_times_run: 0 }));
+// `registry.register(StageName)` can be used when state is not needed.
 ```
-- Note: If `SomeState` implements `Default`, the simple `register` function can be used instead. If no state is explicitly stated, state will simple be set to `()`.
+The `state!` macro uses struct-construction syntax to initialize state fields.
 
 State can also be accessed via one of these methods:
 ```rust,ignore
 let mut registry = Registry::new();
-let node_1 = registry.register(StatefulStage::new());
+let node_1 = registry.register(StatefulStage);
 // Get a reference to internal state
 println!("Node 1 state: {:?}", registry.state(node_1));
 // Get a mutable reference to internal state
@@ -198,7 +198,7 @@ fn main() {
     // This macro is basic syntax sugar for a few calls.
     let graph = graph! {
         // Nodes that will be a part of the graph must be defined.
-        nodes: [node_1, node_2, node_3],
+        nodes: (node_1, node_2, node_3),
         connections: {
             // The below uses unnamed outputs only. Named outputs can be
             // indicated the same way as named inputs, `node_name: output_name`
@@ -226,67 +226,39 @@ fn main() {
 
 As stated before, multiple graphs can be created from that same registry, executed in any order.
 
-#### Get graph output
+###### TODO: Update all the below sections of the README for 0.2 ####################################
 
-Here is a simple example of how to access the outputs of a graph:
+#### Access node inputs, outputs, and state
 
 ```rust
 use directed::*;
 
-#[stage]
-fn TinyStage1() -> String {
-    String::from("This is the output!")
+#[stage(out(string_out: String), state(example_state: u8))]
+fn TinyStage1() -> _ {
+    output!{
+        string_out: String::from("This is the output!")
+    }
 }
 
 let mut registry = Registry::new();
-let node_1 = registry.register(TinyStage1::new());
+let node_1 = registry.register_with_state(TinyStage1, state!(TinyStage1 {example_state: 10}));
 let graph = graph! {
-    nodes: [node_1],
+    nodes: (node_1),
     connections: {}
 }
 .unwrap();
 
 graph.execute(&mut registry).unwrap();
-let mut outputs = graph.get_output(&mut registry).unwrap();
+
+let outputs = registry.get_outputs(node_1);
+
 assert_eq!(
-    outputs.take_unnamed::<String>(node_1).unwrap(),
-    String::from("This is the output!")
+    outputs.unwrap().string_out,
+    Some(String::from("This is the output!"))
 )
 ```
 
-See [GraphOutput::get], [GraphOutput::get_unnamed], [GraphOutput::take], [GraphOutput::take_unnamed]
-
-#### Inject input to top-level unconnected nodes
-
-Similar to the above, the "top" of the graph can also be ineracted with outside of the evaluatyion context
-
-```rust
-use directed::*;
-
-#[stage]
-fn TinyStage1(simple_input: String) -> String {
-    simple_input.replace("input", "output")
-}
-
-let mut registry = Registry::new();
-let node_1 = registry.register(TinyStage1::new());
-let graph = graph! {
-    nodes: [node_1],
-    connections: {}
-}
-.unwrap();
-
-// Note: Inputs have to be referred to by arg name.
-// TODO: Implement a few macros to make the above note into something more 
-//       elegant, and more consistent between inputs and outputs.
-graph.set_input(&mut registry, node_1, "simple_input", String::from("This is the simple input!")).unwrap();
-graph.execute(&mut registry).unwrap();
-let mut outputs = graph.get_output(&mut registry).unwrap();
-assert_eq!(
-    outputs.take_unnamed::<String>(node_1).unwrap(),
-    String::from("This is the simple output!")
-)
-```
+This can also be used to insert inputs into unconnected nodes of graphs, allowing interaction between the graph-based workflow and other arbitrary sources of data.
 
 ## Features
 

@@ -14,6 +14,7 @@ pub enum RefType {
     BorrowedMut,
 }
 
+/// Type reflection for graph I/O
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StageShape {
     pub stage_name: &'static str,
@@ -22,7 +23,7 @@ pub struct StageShape {
 }
 
 impl StageShape {
-    pub(crate) fn input_fields(&self) -> &'static [Field] {
+    pub fn input_fields(&self) -> &'static [Field] {
         match self.inputs.ty {
             facet::Type::User(user_type) => match user_type {
                 facet::UserType::Struct(struct_type) => struct_type.fields,
@@ -32,7 +33,7 @@ impl StageShape {
         }
     }
 
-    pub(crate) fn output_fields(&self) -> &'static [Field] {
+    pub fn output_fields(&self) -> &'static [Field] {
         match self.outputs.ty {
             facet::Type::User(user_type) => match user_type {
                 facet::UserType::Struct(struct_type) => struct_type.fields,

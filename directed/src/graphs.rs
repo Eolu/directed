@@ -244,7 +244,7 @@ impl Graph {
         self.flow_data(registry, top_trace.clone(), node_id, &parents)?;
 
         // Get mutable ref to node
-        let node = registry.get_mut(node_id).ok_or_else(|| {
+        let node = registry.get_node_any_mut(node_id).ok_or_else(|| {
             ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
                 &[node_id.into()] as &[NodeReflection],
             )))
@@ -332,10 +332,8 @@ impl Graph {
         if node.reeval_rule() == ReevaluationRule::Move || node.input_changed() {
             // Evaluate asynchronously
             // TODO: Do someting with output
-            let _ = node.eval_async().await.map_err(|_| {
-                ErrorWithTrace::from(NodeExecutionError::from(
-                    crate::InjectionError::TooManyReferences("async task failed"),
-                ))
+            let _ = node.eval_async().await.map_err(|err| {
+                ErrorWithTrace::from(NodeExecutionError::from(err))
             })?;
 
             node.set_input_changed(false);
@@ -387,7 +385,7 @@ impl Graph {
                 })?;
 
             let (node, parent_node) = registry
-                .get2_mut(node_id, parent_id)
+                .get2_nodes_any_mut(node_id, parent_id)
                 .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))
                 .map_err(|err| err.with_trace(top_trace.clone()))?;
 
@@ -424,7 +422,7 @@ impl Graph {
                 .node_weight(*idx)
                 .ok_or_else(|| NodeExecutionError::from(NodeNotFoundInGraphError::from(*idx)))?;
 
-            let node = match registry.get(node_id) {
+            let node = match registry.get_node_any(node_id) {
                 Some(node) => node,
                 None => {
                     return Err(NodeExecutionError::from(NodesNotFoundError::from(

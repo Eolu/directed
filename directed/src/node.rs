@@ -1,6 +1,6 @@
 //! Nodes contain all logic and state, but no information on order of execution.
 use facet::Field;
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{any::Any, collections::HashMap};
 
 use crate::{
     InjectionError, StageShape,
@@ -13,13 +13,13 @@ use crate::{
 /// TODO: Explain the caching functionality in detail
 #[derive(Debug)]
 pub struct Node<S: Stage> {
-    pub(super) stage: S,
+    pub stage: S,
     // Arbitrary state, by default will be ()
-    pub(super) state: S::State,
-    pub(super) inputs: S::Input,
-    pub(super) outputs: Arc<S::Output>,
-    pub(super) cache: HashMap<u64, Vec<Cached<S>>>,
-    pub(super) input_changed: bool,
+    pub state: S::State,
+    pub inputs: S::Input,
+    pub outputs: S::Output,
+    pub cache: HashMap<u64, Vec<Cached<S>>>,
+    pub input_changed: bool,
 }
 
 /// This represents a cached input/output pair
@@ -36,7 +36,7 @@ impl<S: Stage> Node<S> {
             stage,
             state: initial_state,
             inputs: S::Input::default(),
-            outputs: Arc::new(S::Output::default()),
+            outputs: S::Output::default(),
             cache: HashMap::new(),
             input_changed: true,
         }
@@ -73,7 +73,7 @@ pub trait AnyNode: Any + Send + Sync + 'static {
     /// Used to support `[Self::flow_data]`
     fn inputs_mut(&mut self) -> &mut dyn DynFields;
     /// Used to support `[Self::flow_data]`
-    fn outputs_mut(&mut self) -> Option<&mut dyn DynFields>;
+    fn outputs_mut(&mut self) -> &mut dyn DynFields;
     /// Used to indicate that an input has been modified from a previous run.
     fn set_input_changed(&mut self, val: bool);
     /// See `[Self::set_input_changed]`
@@ -112,11 +112,7 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
         let outputs = self
             .stage
             .evaluate(&mut self.state, &mut self.inputs, &mut self.cache)?;
-        if let Some(out_mut) = self.outputs_mut() {
-            Ok(out_mut.replace(Box::new(outputs)))
-        } else {
-            panic!("TODO: Handle this");
-        }
+        Ok(self.outputs_mut().replace(Box::new(outputs)))
     }
 
     #[cfg(feature = "tokio")]
@@ -125,11 +121,7 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
             .stage
             .evaluate_async(&mut self.state, &mut self.inputs, &mut self.cache)
             .await?;
-        if let Some(out_mut) = self.outputs_mut() {
-            Ok(out_mut.replace(Box::new(outputs)))
-        } else {
-            panic!("TODO: Handle this");
-        }
+        Ok(self.outputs_mut().replace(Box::new(outputs)))
     }
 
     fn flow_data(
@@ -145,8 +137,8 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
         &mut self.inputs as &mut dyn DynFields
     }
 
-    fn outputs_mut(&mut self) -> Option<&mut dyn DynFields> {
-        Arc::get_mut(&mut self.outputs).map(|inner| inner as &mut dyn DynFields)
+    fn outputs_mut(&mut self) -> &mut dyn DynFields {
+        &mut self.outputs as &mut dyn DynFields
     }
 
     fn set_input_changed(&mut self, val: bool) {
