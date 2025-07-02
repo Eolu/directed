@@ -7,32 +7,6 @@
 
 This crate is a Directed-Acyclic-Graph (DAG)-based evaluation system for Rust. It allows you to wrap functions in a way that converts them into stateful Nodes in a graph. These can then be executed in the shortest-path to be able to evaluate one or more output nodes. Inputs and outputs can be cached (memoization), and nodes can have internal state (or not, anything can be stateless as well). Graph connections can be rewired at runtime without the loss of node state.
 
-Here is a visualization of a trivial program structure using this:
-```mermaid
-flowchart TB
-    subgraph Node_1_["Node 1 (TransparentStage)"]
-        1_in_input[/"input: i32"\]
-        1_out__[\"i32"/]
-    end
-    subgraph Node_0_["Node 0 (SourceStage)"]
-        0_out__[\"i32"/]
-    end
-    subgraph Node_3_["Node 3 (SinkStage)"]
-        3_in_o_input[/"o_input: & i32"\]
-        3_in_t_input[/"t_input: & i32"\]
-    end
-    style Node_3_ stroke:yellow,stroke-width:3;
-    subgraph Node_2_["Node 2 (OpaqueStage)"]
-        2_in_input[/"input: & i32"\]
-        2_out__[\"i32"/]
-    end
-    0_out__ --> 1_in_input
-    0_out__ --> 2_in_input
-    1_out__ --> 3_in_t_input
-    2_out__ --> 3_in_o_input
-    linkStyle 3 stroke:yellow,stroke-width:3;
-```
-
 ## Current project status
 
 - 0.2 was a significant rewrite, and this should now be much more stable (although there is still a decent amount that needs to be updated and changed).
