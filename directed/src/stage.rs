@@ -51,20 +51,14 @@ pub trait Stage: Clone + 'static {
     const SHAPE: StageShape;
     /// Internal state only, no special rules apply to this. This is stored
     /// as a tuple of all state parameters in order.
-    #[cfg(not(feature = "tokio"))]
-    type State;
-    #[cfg(feature = "tokio")]
+    /// TODO: Should be possible to relax Send+Sync bounds in sync contexts
     type State: Send + Sync;
-    /// TODO: The input of this stage
-    #[cfg(feature = "tokio")]
+    /// The input of this stage
+    /// TODO: Should be possible to relax Send+Sync bounds in sync contexts
     type Input: Send + Sync + Default + DynFields + Facet<'static>;
-    #[cfg(not(feature = "tokio"))]
-    type Input: Default + DynFields + Facet<'static>;
-    /// TODO: The output of this stage
-    #[cfg(feature = "tokio")]
+    /// The output of this stage
+    /// TODO: Should be possible to relax Send+Sync bounds in sync contexts
     type Output: Send + Sync + Default + DynFields + Facet<'static>;
-    #[cfg(not(feature = "tokio"))]
-    type Output: Default + DynFields + Facet<'static>;
 
     /// Evaluate the stage with the given input and state
     fn evaluate(
