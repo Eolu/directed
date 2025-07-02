@@ -98,7 +98,7 @@ fn StatefulStage() -> String {
 }
 ```
 
-See the [#Node State]() section for details on how to initlialize the state.
+See the `Node State` section for details on how to initlialize the state.
 
 It is possible to access or mutate state outside of graph evaluation. See the `Registry` section for more details.
 
