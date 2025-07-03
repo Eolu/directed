@@ -618,14 +618,13 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
     };
 
     let async_trait_derive = if cfg!(feature = "tokio") {
-        quote::quote!{#[cfg_attr(feature = "tokio", async_trait::async_trait)]}
+        quote::quote!{#[async_trait::async_trait]}
     } else {
         quote::quote!{}
     };
 
     let evaluate_impls = if cfg!(feature = "tokio") {
         quote::quote!{
-            #[cfg(feature = "tokio")]
             async fn evaluate_async(
                 &self,
                 state: &mut Self::State,

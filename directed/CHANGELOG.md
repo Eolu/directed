@@ -1,5 +1,8 @@
-# 0.2.2
-- Massive rewrite, some fixes.
+# 0.2.4
+- Various bugs fixed.
+
+# 0.2.0
+- Massive rewrite.
 
 # 0.1.17
 
