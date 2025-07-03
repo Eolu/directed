@@ -1,4 +1,4 @@
-# 0.2.4
+# 0.2.5
 - Various bugs fixed.
 
 # 0.2.0

@@ -12,6 +12,8 @@ pub use graphs::{EdgeInfo, Graph, TypeReflection};
 pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage, StageShape};
+#[cfg(feature = "tokio")]
+pub use async_trait::async_trait;
 
 /// Simple macro to simulate a function that can return multiple names outputs
 #[macro_export]
