@@ -255,7 +255,7 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 ## WIP features/ideas/TODOs
 
 - Node checkout in async contexts needs more thought and guardrails.
-- Automatic validators to make sure correct input and output types are present if required, especially at runtime as an available API (the use of `facet` should make this easy).
+- Automatic validators to make sure correct input and output types are present if required, especially at runtime as an available API.
 - There is likely some more nuance to exactly where Send+Sync bounds belong
 - Error system is a bit shotgun-fired right now. It should be honed in.
 - A Graph + Registry could be combined to create a Node (with a baked stage). Right now we combine nodes with stages to make the registry, and registries with graphs. If we could instead combine STAGES with graphs, then output a valid registry full of nodes based on that combination, it would avoid the possibility of combining a registry with an invalid graph entirely. (or even, full graph sharding?)

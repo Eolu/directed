@@ -1,7 +1,5 @@
-use facet::{Facet, Field, Shape};
 use std::collections::HashMap;
-
-use crate::DynFields;
+use crate::{DynFields, TypeReflection};
 use crate::{
     InjectionError,
     node::{AnyNode, Node},
@@ -18,30 +16,8 @@ pub enum RefType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StageShape {
     pub stage_name: &'static str,
-    pub inputs: &'static Shape,
-    pub outputs: &'static Shape,
-}
-
-impl StageShape {
-    pub fn input_fields(&self) -> &'static [Field] {
-        match self.inputs.ty {
-            facet::Type::User(user_type) => match user_type {
-                facet::UserType::Struct(struct_type) => struct_type.fields,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn output_fields(&self) -> &'static [Field] {
-        match self.outputs.ty {
-            facet::Type::User(user_type) => match user_type {
-                facet::UserType::Struct(struct_type) => struct_type.fields,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        }
-    }
+    pub inputs: &'static [TypeReflection],
+    pub outputs: &'static [TypeReflection],
 }
 
 /// Defines all the information about how a stage is handled.
@@ -55,10 +31,10 @@ pub trait Stage: Clone + 'static {
     type State: Send + Sync;
     /// The input of this stage
     /// TODO: Should be possible to relax Send+Sync bounds in sync contexts
-    type Input: Send + Sync + Default + DynFields + Facet<'static>;
+    type Input: Send + Sync + Default + DynFields;
     /// The output of this stage
     /// TODO: Should be possible to relax Send+Sync bounds in sync contexts
-    type Output: Send + Sync + Default + DynFields + Facet<'static>;
+    type Output: Send + Sync + Default + DynFields;
 
     /// Evaluate the stage with the given input and state
     fn evaluate(
@@ -90,8 +66,8 @@ pub trait Stage: Clone + 'static {
         &self,
         node: &mut Node<Self>,
         parent: &mut Box<dyn AnyNode>,
-        output: Option<&'static Field>,
-        input: Option<&'static Field>,
+        output: Option<&'static TypeReflection>,
+        input: Option<&'static TypeReflection>,
     ) -> Result<(), InjectionError>;
 }
 
@@ -105,7 +81,7 @@ pub enum EvalStrategy {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Facet)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReevaluationRule {
     /// Always move outputs, reevaluate every time. If the receiving node takes
     /// a reference, it will be pased in, then dropped after that node

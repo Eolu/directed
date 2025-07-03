@@ -21,7 +21,7 @@ macro_rules! graph_internal {
             Some(
                 $left_node
                     .stage_shape()
-                    .output_fields()
+                    .outputs
                     .iter()
                     .find(|field| field.name == stringify!($output))
                     .expect("Output not found in stage"),
@@ -29,7 +29,7 @@ macro_rules! graph_internal {
             Some(
                 $right_node
                     .stage_shape()
-                    .input_fields()
+                    .inputs
                     .iter()
                     .find(|field| field.name == stringify!($input))
                     .expect("Input not found in stage"),
@@ -45,7 +45,7 @@ macro_rules! graph_internal {
             Some(
                 $right_node
                     .stage_shape()
-                    .input_fields()
+                    .inputs
                     .iter()
                     .find(|field| field.name == stringify!($input))
                     .expect("Input not found in stage"),
@@ -79,6 +79,19 @@ macro_rules! graph {
     }
 }
 
+/// Used to reflect on types, important for node connections
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct TypeReflection {
+    pub name: &'static str,
+    pub ty: &'static str,
+}
+
+impl std::fmt::Display for TypeReflection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.name, self.ty)
+    }
+}
+
 /// Directed Acryllic Graph representing the flow of execution in that pipeline.
 /// Only operates on index and edge information - doesn't store actual state.
 ///
@@ -93,8 +106,8 @@ pub struct Graph {
 /// detail of the graph.
 #[derive(Debug, Clone)]
 pub struct EdgeInfo {
-    pub(super) source_output: Option<&'static facet::Field>,
-    pub(super) target_input: Option<&'static facet::Field>,
+    pub(super) source_output: Option<&'static TypeReflection>,
+    pub(super) target_input: Option<&'static TypeReflection>,
 }
 
 impl Graph {
@@ -129,8 +142,8 @@ impl Graph {
         &mut self,
         from_id: NodeId<S0>,
         to_id: NodeId<S1>,
-        source_output: Option<&'static facet::Field>,
-        target_input: Option<&'static facet::Field>,
+        source_output: Option<&'static TypeReflection>,
+        target_input: Option<&'static TypeReflection>,
     ) -> Result<(), EdgeCreationError> {
         let from_idx = self
             .node_indices

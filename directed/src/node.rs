@@ -1,10 +1,8 @@
 //! Nodes contain all logic and state, but no information on order of execution.
-use facet::Field;
 use std::{any::Any, collections::HashMap};
 
 use crate::{
-    InjectionError, StageShape,
-    stage::{EvalStrategy, ReevaluationRule, Stage},
+    stage::{EvalStrategy, ReevaluationRule, Stage}, InjectionError, StageShape, TypeReflection
 };
 
 /// Every node wraps a Stage, which is a decorated function that has some
@@ -67,8 +65,8 @@ pub trait AnyNode: Any + Send + Sync + 'static {
     fn flow_data(
         &mut self,
         child: &mut Box<dyn AnyNode>,
-        output: Option<&'static Field>,
-        input: Option<&'static Field>,
+        output: Option<&'static TypeReflection>,
+        input: Option<&'static TypeReflection>,
     ) -> Result<(), InjectionError>;
     /// Used to support `[Self::flow_data]`
     fn inputs_mut(&mut self) -> &mut dyn DynFields;
@@ -127,8 +125,8 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
     fn flow_data(
         &mut self,
         child: &mut Box<dyn AnyNode>,
-        output: Option<&'static Field>,
-        input: Option<&'static Field>,
+        output: Option<&'static TypeReflection>,
+        input: Option<&'static TypeReflection>,
     ) -> Result<(), InjectionError> {
         self.stage.clone().inject_input(self, child, output, input)
     }
@@ -157,22 +155,22 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
 /// Trait to abstract over accessing and taking outputs from nodes
 #[cfg(not(feature = "tokio"))]
 pub trait DynFields: Any {
-    fn field<'a>(&'a self, field: Option<&'static Field>) -> Option<&'a (dyn Any + 'static)>;
+    fn field<'a>(&'a self, field: Option<&'static TypeReflection>) -> Option<&'a (dyn Any + 'static)>;
     fn field_mut<'a>(
         &'a mut self,
-        field: Option<&'static Field>,
+        field: Option<&'static TypeReflection>,
     ) -> Option<&'a mut (dyn Any + 'static)>;
-    fn take_field(&mut self, field: Option<&'static Field>) -> Option<Box<dyn Any>>;
+    fn take_field(&mut self, field: Option<&'static TypeReflection>) -> Option<Box<dyn Any>>;
     fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
 }
 
 #[cfg(feature = "tokio")]
 pub trait DynFields: Any + Send + Sync {
-    fn field<'a>(&'a self, field: Option<&'static Field>) -> Option<&'a (dyn Any + 'static)>;
+    fn field<'a>(&'a self, field: Option<&'static TypeReflection>) -> Option<&'a (dyn Any + 'static)>;
     fn field_mut<'a>(
         &'a mut self,
-        field: Option<&'static Field>,
+        field: Option<&'static TypeReflection>,
     ) -> Option<&'a mut (dyn Any + 'static)>;
-    fn take_field(&mut self, field: Option<&'static Field>) -> Option<Box<dyn Any>>;
+    fn take_field(&mut self, field: Option<&'static TypeReflection>) -> Option<Box<dyn Any>>;
     fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
 }

@@ -51,7 +51,7 @@ fn generate_extraction_code(
                 let (#arg_name, #reeval_name): (#arg_type, directed::ReevaluationRule) = {
                     match inputs.#arg_name.take() {
                         Some((arg, reeval_name)) => (arg, reeval_name),
-                        None => return Err(directed::InjectionError::InputNotFound(Self::SHAPE.input_fields().iter().find(|field| field.name == #clean_arg_name)))
+                        None => return Err(directed::InjectionError::InputNotFound(Self::SHAPE.inputs.iter().find(|field| field.name == #clean_arg_name)))
                     }
                 };
             },
@@ -59,7 +59,7 @@ fn generate_extraction_code(
                 let (#arg_name, #reeval_name): (#arg_type, directed::ReevaluationRule) = {
                     match &inputs.#arg_name {
                         Some((arg, reeval_name)) => (arg.clone(), *reeval_name),
-                        None => return Err(directed::InjectionError::InputNotFound(Self::SHAPE.input_fields().iter().find(|field| field.name == #clean_arg_name)))
+                        None => return Err(directed::InjectionError::InputNotFound(Self::SHAPE.inputs.iter().find(|field| field.name == #clean_arg_name)))
                     }
                 };
             },
@@ -103,7 +103,7 @@ fn input_injection(
     let default_case = quote_spanned! {Span::call_site()=>
         Some(name) => {
             // TODO: Verify the unwrap in unreachable
-            Err(directed::InjectionError::InputNotFound(#stage_name::SHAPE.input_fields().iter().find(|field| field.name == name)))
+            Err(directed::InjectionError::InputNotFound(#stage_name::SHAPE.inputs.iter().find(|field| field.name == name)))
         },
         None => Ok(()) // This means there's a connection with no data associated
     };
@@ -188,8 +188,8 @@ fn generate_inject_helpers(
         fn inject_move(
             node: &mut directed::Node<#stage_name>,
             parent: &mut Box<dyn directed::AnyNode>,
-            output: Option<&'static directed::facet::Field>,
-            input: Option<&'static directed::facet::Field>
+            output: Option<&'static directed::TypeReflection>,
+            input: Option<&'static directed::TypeReflection>
         ) -> Result<(), directed::InjectionError> {
             match input.map(|input| input.name) {
                 #(#inject_move_arms)*
@@ -202,8 +202,8 @@ fn generate_inject_helpers(
         fn inject_clone(
             node: &mut directed::Node<#stage_name>,
             parent: &mut Box<dyn directed::AnyNode>,
-            output: Option<&'static directed::facet::Field>,
-            input: Option<&'static directed::facet::Field>
+            output: Option<&'static directed::TypeReflection>,
+            input: Option<&'static directed::TypeReflection>
         ) -> Result<(), directed::InjectionError> {
             match input.map(|input| input.name) {
                 #(#inject_clone_arms)*
@@ -367,21 +367,21 @@ fn generate_dyn_fields_impl<P: Param>(params: impl Iterator<Item = P>) -> proc_m
         }
     }
     quote_spanned! {Span::mixed_site()=>
-       fn field<'a>(&'a self, field: Option<&'static directed::facet::Field>) -> Option<&'a (dyn std::any::Any + 'static)> {
+       fn field<'a>(&'a self, field: Option<&'static directed::TypeReflection>) -> Option<&'a (dyn std::any::Any + 'static)> {
             match field.map(|field| field.name) {
                 #(#field_arms)*
                 _ => None
             }
         }
 
-        fn field_mut<'a>(&'a mut self, field: Option<&'static directed::facet::Field>) -> Option<&'a mut (dyn std::any::Any + 'static)> {
+        fn field_mut<'a>(&'a mut self, field: Option<&'static directed::TypeReflection>) -> Option<&'a mut (dyn std::any::Any + 'static)> {
             match field.map(|field| field.name) {
                 #(#field_mut_arms)*
                 _ => None
             }
         }
 
-        fn take_field(&mut self, field: Option<&'static directed::facet::Field>) -> Option<Box<dyn std::any::Any>> {
+        fn take_field(&mut self, field: Option<&'static directed::TypeReflection>) -> Option<Box<dyn std::any::Any>> {
             match field.map(|field| field.name) {
                 #(#take_field_arms)*
                 _ => None
@@ -434,20 +434,20 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
     // Determine derives for inputs
     let input_derives = match config.cache_strategy.0 {
         CacheStrategy::None => {
-            quote_spanned! {config.cache_strategy.1=>#[derive(Default, directed::facet::Facet)]}
+            quote_spanned! {config.cache_strategy.1=>#[derive(Default)]}
         }
         CacheStrategy::Last => {
-            quote_spanned! {config.cache_strategy.1=>#[derive(Default, Clone, PartialEq, directed::facet::Facet)]}
+            quote_spanned! {config.cache_strategy.1=>#[derive(Default, Clone, PartialEq)]}
         }
         CacheStrategy::All => {
-            quote_spanned! {config.cache_strategy.1=>#[derive(Default, Clone, PartialEq, Eq, Hash, directed::facet::Facet)]}
+            quote_spanned! {config.cache_strategy.1=>#[derive(Default, Clone, PartialEq, Eq, Hash)]}
         }
     };
     // Determine derives for outputs
     let output_derives = match config.cache_strategy.0 {
-        CacheStrategy::None => quote::quote! {#[derive(Default, directed::facet::Facet)]},
+        CacheStrategy::None => quote::quote! {#[derive(Default)]},
         CacheStrategy::Last | CacheStrategy::All => {
-            quote_spanned! {config.cache_strategy.1=>#[derive(Default, Clone, directed::facet::Facet)]}
+            quote_spanned! {config.cache_strategy.1=>#[derive(Default, Clone)]}
         }
     };
 
@@ -467,6 +467,21 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
         }
     };
     let input_dyn_fields_trait_impl = generate_dyn_fields_impl(config.inputs.iter());
+    let input_shape = {
+        let input_fields = config.inputs.iter().map(|field| {
+            let name = field.clean_name.to_string();
+            let ty = &field.ty;
+            let ty_string = quote::quote!{#ty}.to_string();
+            quote::quote!{
+                directed::TypeReflection { name: #name, ty: #ty_string }
+            }
+        });
+        quote::quote!{
+            impl #input_struct_name {
+                const SHAPE: &'static [directed::TypeReflection] = &[#(#input_fields),*];
+            }
+        }
+    };
 
     let output_struct = match &config.outputs {
         OutputParams::Explicit(output_params) => {
@@ -501,6 +516,29 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
             .into(),
             span: Span::mixed_site(),
         })),
+    };
+    let output_shape = {
+        let output_fields = match &config.outputs {
+            OutputParams::Explicit(output_params) => output_params.iter().map(|field| {
+                let name = field.name.to_string();
+                let ty = &field.ty;
+                let ty_string = quote::quote!{#ty}.to_string();
+                quote::quote_spanned!{field.span=>
+                    directed::TypeReflection { name: #name, ty: #ty_string }
+                }
+            }).collect(),
+            OutputParams::Implicit(ty, span) => {
+                let ty_string = quote::quote!{ty}.to_string();
+                vec!(quote::quote_spanned!{*span=>
+                    directed::TypeReflection { name: "_", ty: #ty_string }
+                })
+            },
+        };
+        quote::quote!{
+            impl #output_struct_name {
+                const SHAPE: &'static [directed::TypeReflection] = &[#(#output_fields),*];
+            }
+        }
     };
 
     let state_struct_fields =
@@ -632,7 +670,9 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
 
         // Structs to contain various caches
         #input_struct
+        #input_shape
         #output_struct
+        #output_shape
         #state_struct
 
         impl directed::DynFields for #output_struct_name {
@@ -672,7 +712,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 #reevaluation_rule
             }
 
-            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: Option<&'static directed::facet::Field>, input: Option<&'static directed::facet::Field>) -> Result<(), directed::InjectionError> {
+            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: Option<&'static directed::TypeReflection>, input: Option<&'static directed::TypeReflection>) -> Result<(), directed::InjectionError> {
                 #injection_code
             }
         }

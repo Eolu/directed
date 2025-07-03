@@ -1,7 +1,5 @@
 //! Errors and the graph trace system
-use facet::Field;
-
-use crate::{AnyNode, Graph, Registry, registry::NodeReflection};
+use crate::{TypeReflection, registry::NodeReflection, AnyNode, Graph, Registry};
 use std::fmt::{self, Display, Formatter, Write};
 
 /// Wrapper error type, wraps errors from this crate and stores a graph information with them.
@@ -15,13 +13,13 @@ pub struct ErrorWithTrace<T: std::error::Error> {
 #[derive(thiserror::Error, Debug)]
 pub enum InjectionError {
     #[error("Output '{0:?}' not found")]
-    OutputNotFound(Option<&'static Field>),
+    OutputNotFound(Option<&'static TypeReflection>),
     #[error("Output '{0:?}' type mismatch")]
-    OutputTypeMismatch(Option<&'static Field>),
+    OutputTypeMismatch(Option<&'static TypeReflection>),
     #[error("Input '{0:?}' not found")]
-    InputNotFound(Option<&'static Field>),
+    InputNotFound(Option<&'static TypeReflection>),
     #[error("Input '{0:?}' type mismatch")]
-    InputTypeMismatch(Option<&'static Field>),
+    InputTypeMismatch(Option<&'static TypeReflection>),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -143,9 +141,9 @@ pub struct NodeInfo {
     /// The name of the node.
     pub name: &'static str,
     /// The input fields of the node.
-    pub inputs: &'static [Field],
+    pub inputs: &'static [TypeReflection],
     /// The output fields of the node.
-    pub outputs: &'static [Field],
+    pub outputs: &'static [TypeReflection],
     /// Used for debugging purposes
     pub highlighted: bool,
 }
@@ -156,11 +154,11 @@ pub struct ConnectionInfo {
     /// The ID of the source node.
     pub source_id: NodeReflection,
     /// The output label of the source node.
-    pub source_output: Option<&'static Field>,
+    pub source_output: Option<&'static TypeReflection>,
     /// The ID of the target node.
     pub target_id: NodeReflection,
     /// The input label of the target node.
-    pub target_input: Option<&'static Field>,
+    pub target_input: Option<&'static TypeReflection>,
     /// Used for debugging purposes
     pub highlighted: bool,
 }
@@ -186,8 +184,8 @@ impl Graph {
                 let node_info = NodeInfo {
                     id,
                     name: stage_shape.stage_name,
-                    inputs: stage_shape.input_fields(),
-                    outputs: stage_shape.output_fields(),
+                    inputs: stage_shape.inputs,
+                    outputs: stage_shape.outputs,
                     highlighted: false,
                 };
                 nodes.push(node_info);
@@ -242,9 +240,9 @@ impl GraphTrace {
     pub fn highlight_connection(
         &mut self,
         source_node: NodeReflection,
-        source_output: Option<&'static Field>,
+        source_output: Option<&'static TypeReflection>,
         target_node: NodeReflection,
-        target_input: Option<&'static Field>,
+        target_input: Option<&'static TypeReflection>,
     ) {
         if let Some(conn) = self.connections.iter_mut().find(|conn| {
             conn.source_id == source_node
@@ -279,7 +277,7 @@ impl GraphTrace {
             // Define a node for each input port
             for input in node.inputs.iter() {
                 let field_name = input.name;
-                let ty = input.shape.to_string();
+                let ty = input.ty;
                 writeln!(
                     &mut result,
                     "        {}_in_{}[/\"{}: {ty}\"\\]",
@@ -301,7 +299,7 @@ impl GraphTrace {
                 )
                 .unwrap();
                 write!(&mut result, "{}: ", field_name).unwrap();
-                let type_name = &output.shape.to_string();
+                let type_name = output.ty;
                 write!(&mut result, "{type_name}").unwrap();
                 writeln!(&mut result, "\"/]").unwrap();
             }

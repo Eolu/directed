@@ -8,8 +8,7 @@ mod stage;
 // TODO: Separate out internal-only interfaces
 pub use directed_stage_macro::stage;
 pub use error::*;
-pub use facet::{self, Facet};
-pub use graphs::{EdgeInfo, Graph};
+pub use graphs::{EdgeInfo, Graph, TypeReflection};
 pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage, StageShape};
@@ -42,7 +41,6 @@ pub type TypeAlias<T> = T;
 mod tests {
     extern crate self as directed;
     use super::*;
-    use directed::facet::Facet;
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -691,7 +689,6 @@ mod tests {
 mod async_tests {
     extern crate self as directed;
     use super::*;
-    use super::facet::Facet;
     use directed_stage_macro::stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
