@@ -528,7 +528,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
                 }
             }).collect(),
             OutputParams::Implicit(ty, span) => {
-                let ty_string = quote::quote!{ty}.to_string();
+                let ty_string = quote::quote!{#ty}.to_string();
                 vec!(quote::quote_spanned!{*span=>
                     directed::TypeReflection { name: "_", ty: #ty_string }
                 })

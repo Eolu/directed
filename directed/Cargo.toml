@@ -14,7 +14,7 @@ documentation = "https://docs.rs/directed"
 tokio = ["dep:tokio", "dep:async-recursion", "dep:async-trait", "directed-stage-macro/tokio"]
 
 [dependencies]
-directed-stage-macro = { version = "0.2.2", path = "../directed-stage-macro" }
+directed-stage-macro = { version = "0.2.3", path = "../directed-stage-macro" }
 daggy = "0.9"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"], optional = true }
