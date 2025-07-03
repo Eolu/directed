@@ -579,6 +579,46 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
         quote::quote!(#eval_logic)
     };
 
+    let async_trait_derive = if cfg!(feature = "tokio") {
+        quote::quote!{#[cfg_attr(feature = "tokio", async_trait::async_trait)]}
+    } else {
+        quote::quote!{}
+    };
+
+    let evaluate_impls = if cfg!(feature = "tokio") {
+        quote::quote!{
+            #[cfg(feature = "tokio")]
+            async fn evaluate_async(
+                &self,
+                state: &mut Self::State,
+                inputs: &mut Self::Input,
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<Self>>>,
+            ) -> Result<Self::Output, InjectionError> {
+                #async_eval_logic
+            }
+
+            fn evaluate(
+                &self,
+                state: &mut Self::State,
+                inputs: &mut Self::Input,
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<Self>>>,
+            ) -> Result<Self::Output, InjectionError> {
+                #sync_eval_logic
+            }
+        }
+    } else {
+        quote::quote!{
+            fn evaluate(
+                &self,
+                state: &mut Self::State,
+                inputs: &mut Self::Input,
+                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<Self>>>,
+            ) -> Result<Self::Output, InjectionError> {
+                #sync_eval_logic
+            }
+        }
+    };
+
     // The coup de grace
     Ok(quote_spanned! {Span::call_site()=>
         // Create a struct implementing the Stage trait
@@ -611,7 +651,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
             }
         }
 
-        #[cfg_attr(feature = "tokio", async_trait::async_trait)]
+        #async_trait_derive
         impl directed::Stage for #stage_name {
             const SHAPE: directed::StageShape = directed::StageShape {
                 stage_name: #stage_name_str,
@@ -622,24 +662,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
             type Output = #output_struct_name;
             type State = #state_struct_name;
 
-            fn evaluate(
-                &self,
-                state: &mut Self::State,
-                inputs: &mut Self::Input,
-                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<Self>>>,
-            ) -> Result<Self::Output, InjectionError> {
-                #sync_eval_logic
-            }
-
-            #[cfg(feature = "tokio")]
-            async fn evaluate_async(
-                &self,
-                state: &mut Self::State,
-                inputs: &mut Self::Input,
-                cache: &mut std::collections::HashMap<u64, Vec<directed::Cached<Self>>>,
-            ) -> Result<Self::Output, InjectionError> {
-                #async_eval_logic
-            }
+            #evaluate_impls
 
             fn eval_strategy(&self) -> directed::EvalStrategy {
                 #eval_strategy

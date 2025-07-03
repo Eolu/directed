@@ -1,3 +1,6 @@
+# 0.2.2
+- Massive rewrite, some fixes.
+
 # 0.1.17
 
 - Inputs to top-level nodes can now be injected.
