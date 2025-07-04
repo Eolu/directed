@@ -313,6 +313,7 @@ impl Registry {
     }
 
     /// Used to await node availability
+    #[cfg(feature = "tokio")]
     pub fn node_availability(&self, id: NodeReflection) -> Option<tokio::sync::watch::Receiver<bool>> {
         match self.1.get(id.id) {
             Some((_, rx)) => Some(rx.clone()),
@@ -348,6 +349,7 @@ impl Registry {
     pub fn replace_node(&mut self, id: NodeReflection, node: Box<dyn AnyNode>) {
         *self.0.get_mut(id.id).unwrap() = Some(node);
         // TODO: Handle errors sanely
+        #[cfg(feature = "tokio")]
         self.1.get_mut(id.id).unwrap().0.send(true).unwrap();
     }
 
