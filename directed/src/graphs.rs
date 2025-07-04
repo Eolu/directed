@@ -333,7 +333,7 @@ impl Graph {
         let mut node = {
             let mut registry = registry.lock().await;
             // Determine if we need to evaluate
-            registry.take_node(node_id).ok_or_else(|| {
+            registry.take_node(node_id).await.ok_or_else(|| {
                 ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
                     &[node_id.into()] as &[NodeReflection],
                 )))

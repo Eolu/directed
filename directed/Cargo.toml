@@ -1,6 +1,6 @@
 [package]
 name = "directed"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 description = "Evaluate programs based on Directed Acyclic Graphs"
 license = "MIT"

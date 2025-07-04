@@ -1,4 +1,5 @@
 //! The registry is the "global" store of logic and state.
+
 use crate::{
     NodeTypeMismatchError, NodesNotFoundError, RegistryError,
     node::{AnyNode, Node},
@@ -68,6 +69,7 @@ impl Ord for NodeReflection {
 pub struct Registry(pub(super) Vec<Option<Box<dyn AnyNode>>>);
 
 impl Registry {
+
     pub fn new() -> Self {
         Self(Vec::new())
     }
@@ -305,10 +307,19 @@ impl Registry {
     /// This does not unregister the node, and it can be placed back
     /// inside the registry via it's ID. Returns None if the node is
     /// already taken or never existed.
-    pub fn take_node(&mut self, id: NodeReflection) -> Option<Box<dyn AnyNode>> {
+    #[cfg(feature = "tokio")]
+    pub async fn take_node(&mut self, id: NodeReflection) -> Option<Box<dyn AnyNode>> {
         match self.0.get_mut(id.id) {
-            Some(maybe_node) => maybe_node.take(),
-            None => None,
+            Some(maybe_node) => {
+                loop {
+                    match maybe_node.take() {
+                        Some(node) => return Some(node),
+                        // TODO: This is obviously bad, but using it to prototype until a real solution is found
+                        None => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+                    }
+                }
+            },
+            None => return None,
         }
     }
 

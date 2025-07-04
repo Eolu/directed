@@ -254,6 +254,7 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 
 ## WIP features/ideas/TODOs
 
+- High priority: Async operations lose efficiency do to an ill-advised 100ms sleep loop while waiting for nodes to be available. Fix this!
 - Node checkout in async contexts needs more thought and guardrails.
 - Automatic validators to make sure correct input and output types are present if required, especially at runtime as an available API.
 - There is likely some more nuance to exactly where Send+Sync bounds belong
