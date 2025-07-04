@@ -1,5 +1,5 @@
-# 0.2.6
-- Quick nad dirty fix to get async working properly. This introduces a 100ms poll and is not something that should stick around long in future versions!
+# 0.2.7
+- Got async working
 
 # 0.2.5
 - Various bugs fixed.

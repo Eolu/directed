@@ -5,6 +5,8 @@ use crate::{
     node::{AnyNode, Node},
     stage::{Stage, StageShape},
 };
+#[cfg(feature = "tokio")]
+use std::sync::Arc;
 use std::{any::TypeId, marker::PhantomData};
 
 /// Used to access nodes within the registry, just a simple `usize` alias
@@ -66,12 +68,15 @@ impl Ord for NodeReflection {
 
 /// A [Registry] stores each node, its state, and the logical [Stage]
 /// associated with it.
-pub struct Registry(pub(super) Vec<Option<Box<dyn AnyNode>>>);
+pub struct Registry(
+    pub(super) Vec<Option<Box<dyn AnyNode>>>, 
+    #[cfg(feature = "tokio")] pub(super) Vec<(tokio::sync::watch::Sender<bool>, tokio::sync::watch::Receiver<bool>)>
+);
 
 impl Registry {
 
     pub fn new() -> Self {
-        Self(Vec::new())
+        Self(Vec::new(), #[cfg(feature = "tokio")] Vec::new())
     }
 
     /// Get a reference to the state of a specific node.
@@ -128,6 +133,8 @@ impl Registry {
         let next = self.0.len();
         self.0
             .push(Some(Box::new(Node::new(stage, S::State::default()))));
+        #[cfg(feature = "tokio")]
+        self.1.push(tokio::sync::watch::channel(true));
         NodeId(next, PhantomData)
     }
 
@@ -144,6 +151,8 @@ impl Registry {
     {
         let next = self.0.len();
         self.0.push(Some(Box::new(Node::new(stage, state))));
+        #[cfg(feature = "tokio")]
+        self.1.push(tokio::sync::watch::channel(true));
         NodeId(next, PhantomData)
     }
 
@@ -303,6 +312,14 @@ impl Registry {
         }
     }
 
+    /// Used to await node availability
+    pub fn node_availability(&self, id: NodeReflection) -> Option<tokio::sync::watch::Receiver<bool>> {
+        match self.1.get(id.id) {
+            Some((_, rx)) => Some(rx.clone()),
+            None => None,
+        }
+    }
+
     /// Takes a node out of the registry, gaining ownership of it.
     /// This does not unregister the node, and it can be placed back
     /// inside the registry via it's ID. Returns None if the node is
@@ -311,15 +328,18 @@ impl Registry {
     pub async fn take_node(&mut self, id: NodeReflection) -> Option<Box<dyn AnyNode>> {
         match self.0.get_mut(id.id) {
             Some(maybe_node) => {
-                loop {
-                    match maybe_node.take() {
-                        Some(node) => return Some(node),
-                        // TODO: This is obviously bad, but using it to prototype until a real solution is found
-                        None => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
-                    }
+                match maybe_node.take() {
+                    Some(node) => {
+                        // TODO: Handle errors sanely
+                        self.1.get_mut(id.id).unwrap().0.send(false).unwrap();
+                        Some(node)
+                    },
+                    None => {
+                        panic!("TODO: Handle missing node")
+                    },
                 }
             },
-            None => return None,
+            None => None,
         }
     }
 
@@ -327,6 +347,8 @@ impl Registry {
     /// if the node never existed at that ID in the first place.
     pub fn replace_node(&mut self, id: NodeReflection, node: Box<dyn AnyNode>) {
         *self.0.get_mut(id.id).unwrap() = Some(node);
+        // TODO: Handle errors sanely
+        self.1.get_mut(id.id).unwrap().0.send(true).unwrap();
     }
 
     /// Gets a reference to the inputs from a node

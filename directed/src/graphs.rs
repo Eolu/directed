@@ -331,6 +331,17 @@ impl Graph {
 
         // Pull the node out of the registry
         let mut node = {
+            let mut node_availability = {
+                let registry = registry.lock().await;
+                registry.node_availability(node_id).ok_or_else(|| {
+                    ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
+                        &[node_id.into()] as &[NodeReflection],
+                    )))
+                    .with_trace(top_trace.clone())
+                })?
+            };
+            // TODO: Handle error
+            node_availability.wait_for(|&t| t).await.unwrap();
             let mut registry = registry.lock().await;
             // Determine if we need to evaluate
             registry.take_node(node_id).await.ok_or_else(|| {
@@ -345,6 +356,7 @@ impl Graph {
         if node.reeval_rule() == ReevaluationRule::Move || node.input_changed() {
             // Evaluate asynchronously
             // TODO: Do someting with output
+
             let _ = node.eval_async().await.map_err(|err| {
                 ErrorWithTrace::from(NodeExecutionError::from(err))
             })?;
@@ -353,6 +365,7 @@ impl Graph {
         }
 
         // Eval is done, reinsert node
+        let name = node.stage_shape().stage_name;
         registry.lock().await.replace_node(node_id, node);
 
         Ok(())
