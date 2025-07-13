@@ -1,6 +1,6 @@
 [package]
 name = "directed-stage-macro"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 description = "Core macro for directed crate"
 license = "MIT"

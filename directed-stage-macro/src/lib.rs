@@ -338,6 +338,7 @@ fn generate_dyn_fields_impl<P: Param>(params: impl Iterator<Item = P>) -> proc_m
     let mut field_arms: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut field_mut_arms: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut take_field_arms: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut clear_impl: Vec<proc_macro2::TokenStream> = Vec::new();
     for param in params {
         let (name, _, _span) = param.param();
         match &name {
@@ -352,6 +353,9 @@ fn generate_dyn_fields_impl<P: Param>(params: impl Iterator<Item = P>) -> proc_m
                 take_field_arms.push(quote_spanned! {Span::mixed_site()=>
                     Some(#name_str) => self.#name.take().map(|a| Box::new(a) as Box<dyn std::any::Any>),
                 });
+                clear_impl.push(quote_spanned! {Span::mixed_site()=>
+                    drop(self.#name.take());
+                });
             }
             syn::Member::Unnamed(index) => {
                 field_arms.push(quote_spanned! {Span::mixed_site()=>
@@ -362,6 +366,9 @@ fn generate_dyn_fields_impl<P: Param>(params: impl Iterator<Item = P>) -> proc_m
                 });
                 take_field_arms.push(quote_spanned! {Span::mixed_site()=>
                     None => self.#index.take().map(|a| Box::new(a) as Box<dyn std::any::Any>),
+                });
+                clear_impl.push(quote_spanned! {Span::mixed_site()=>
+                    drop(self.#index.take());
                 });
             }
         }
@@ -386,6 +393,10 @@ fn generate_dyn_fields_impl<P: Param>(params: impl Iterator<Item = P>) -> proc_m
                 #(#take_field_arms)*
                 _ => None
             }
+        }
+
+        fn clear(&mut self) {
+            #(#clear_impl)*
         }
     }
 }

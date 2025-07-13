@@ -254,6 +254,7 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 
 ## WIP features/ideas/TODOs
 
+- The ability to clear state has been added to nodes. There now needs to be a way to represent that as a stage
 - Node checkout in async contexts needs more thought and guardrails.
 - Automatic validators to make sure correct input and output types are present if required, especially at runtime as an available API.
 - There is likely some more nuance to exactly where Send+Sync bounds belong

@@ -77,6 +77,7 @@ pub trait AnyNode: Any + Send + Sync + 'static {
     /// See `[Self::set_input_changed]`
     fn input_changed(&self) -> bool;
     fn cache_mut(&mut self) -> &mut dyn Any;
+    fn clear_state(&mut self);
 }
 
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
@@ -150,6 +151,12 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
     fn cache_mut(&mut self) -> &mut dyn Any {
         &mut self.cache
     }
+
+    fn clear_state(&mut self) {
+        self.cache.clear();
+        self.inputs.clear();
+        self.outputs.clear();
+    }
 }
 
 /// Trait to abstract over accessing and taking outputs from nodes
@@ -173,4 +180,6 @@ pub trait DynFields: Any + Send + Sync {
     ) -> Option<&'a mut (dyn Any + 'static)>;
     fn take_field(&mut self, field: Option<&'static TypeReflection>) -> Option<Box<dyn Any>>;
     fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
+    /// Set all fields to `None`
+    fn clear(&mut self);
 }
