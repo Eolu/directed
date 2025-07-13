@@ -254,7 +254,6 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 
 ## WIP features/ideas/TODOs
 
-- High priority: Async operations lose efficiency do to an ill-advised 100ms sleep loop while waiting for nodes to be available. Fix this!
 - Node checkout in async contexts needs more thought and guardrails.
 - Automatic validators to make sure correct input and output types are present if required, especially at runtime as an available API.
 - There is likely some more nuance to exactly where Send+Sync bounds belong
@@ -264,4 +263,4 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 - Make a cool visual "rust playgraph" based on this crate
     - Ability to create stages, and compile
     - Ability to create nodes from stages, and attach them and execute (without recompiling!)
-- Currently the control over what happens in between node evaluations is minimal (essential clone, move, or pass ref). There is clearly an opportunity to do more here, such as providing automative From/Into conversions where it makes sense. This may be worth targeting for a 0.3 feature.
+- Currently the control over what happens in between node evaluations is minimal (essentially clone, move, or pass ref). There is clearly an opportunity to do more here, such as providing automative From/Into conversions where it makes sense. This may be worth targeting for a 0.3 feature.
