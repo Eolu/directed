@@ -169,6 +169,8 @@ pub trait DynFields: Any {
     ) -> Option<&'a mut (dyn Any + 'static)>;
     fn take_field(&mut self, field: Option<&'static TypeReflection>) -> Option<Box<dyn Any>>;
     fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
+    /// Set all fields to `None`
+    fn clear(&mut self);
 }
 
 #[cfg(feature = "tokio")]
