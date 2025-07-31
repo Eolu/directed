@@ -69,7 +69,7 @@ macro_rules! __graph_internal {
                     .stage_shape()
                     .outputs
                     .iter()
-                    .find(|field| field.name == stringify!($output))
+                    .find(|&&field| field == stringify!($output))
                     .expect("Output not found in stage"),
             ),
             Some(
@@ -77,7 +77,7 @@ macro_rules! __graph_internal {
                     .stage_shape()
                     .inputs
                     .iter()
-                    .find(|field| field.name == stringify!($input))
+                    .find(|&&field| field == stringify!($input))
                     .expect("Input not found in stage"),
             ),
         )
@@ -93,7 +93,7 @@ macro_rules! __graph_internal {
                     .stage_shape()
                     .inputs
                     .iter()
-                    .find(|field| field.name == stringify!($input))
+                    .find(|&&field| field == stringify!($input))
                     .expect("Input not found in stage"),
             ),
         )
@@ -102,19 +102,6 @@ macro_rules! __graph_internal {
     ($graph:expr => $left_node:ident => $right_node:ident,) => {
         $graph.connect($left_node, $right_node, None, None)
     };
-}
-
-/// Used to reflect on types, important for node connections
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeReflection {
-    pub name: &'static str,
-    pub ty: &'static str,
-}
-
-impl std::fmt::Display for TypeReflection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.name, self.ty)
-    }
 }
 
 /// Directed Acryllic Graph representing the flow of execution in that pipeline.
@@ -131,8 +118,8 @@ pub struct Graph {
 /// detail of the graph.
 #[derive(Debug, Clone)]
 pub struct EdgeInfo {
-    pub(super) source_output: Option<&'static TypeReflection>,
-    pub(super) target_input: Option<&'static TypeReflection>,
+    pub(super) source_output: Option<&'static str>,
+    pub(super) target_input: Option<&'static str>,
 }
 
 impl Graph {
@@ -167,8 +154,8 @@ impl Graph {
         &mut self,
         from_id: impl Into<NodeReflection>,
         to_id: impl Into<NodeReflection>,
-        source_output: Option<&'static TypeReflection>,
-        target_input: Option<&'static TypeReflection>,
+        source_output: Option<&'static str>,
+        target_input: Option<&'static str>,
     ) -> Result<(), EdgeCreationError> {
         let from_id: NodeReflection = from_id.into();
         let to_id: NodeReflection = to_id.into();

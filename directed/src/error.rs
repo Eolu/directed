@@ -1,5 +1,5 @@
 //! Errors and the graph trace system
-use crate::{AnyNode, Graph, Registry, TypeReflection, registry::NodeReflection};
+use crate::{AnyNode, Graph, Registry, registry::NodeReflection};
 use std::fmt::{self, Display, Formatter, Write};
 
 /// Wrapper error type, wraps errors from this crate and stores a graph information with them.
@@ -13,13 +13,13 @@ pub struct ErrorWithTrace<T: std::error::Error> {
 #[derive(thiserror::Error, Debug)]
 pub enum InjectionError {
     #[error("Output '{0:?}' not found")]
-    OutputNotFound(Option<&'static TypeReflection>),
+    OutputNotFound(Option<&'static str>),
     #[error("Output '{0:?}' type mismatch")]
-    OutputTypeMismatch(Option<&'static TypeReflection>),
+    OutputTypeMismatch(Option<&'static str>),
     #[error("Input '{0:?}' not found")]
-    InputNotFound(Option<&'static TypeReflection>),
+    InputNotFound(Option<&'static str>),
     #[error("Input '{0:?}' type mismatch")]
-    InputTypeMismatch(Option<&'static TypeReflection>),
+    InputTypeMismatch(Option<&'static str>),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -151,9 +151,9 @@ pub struct NodeInfo {
     /// The name of the node.
     pub name: &'static str,
     /// The input fields of the node.
-    pub inputs: &'static [TypeReflection],
+    pub inputs: &'static [&'static str],
     /// The output fields of the node.
-    pub outputs: &'static [TypeReflection],
+    pub outputs: &'static [&'static str],
     /// Used for debugging purposes
     pub highlighted: bool,
 }
@@ -164,11 +164,11 @@ pub struct ConnectionInfo {
     /// The ID of the source node.
     pub source_id: NodeReflection,
     /// The output label of the source node.
-    pub source_output: Option<&'static TypeReflection>,
+    pub source_output: Option<&'static str>,
     /// The ID of the target node.
     pub target_id: NodeReflection,
     /// The input label of the target node.
-    pub target_input: Option<&'static TypeReflection>,
+    pub target_input: Option<&'static str>,
     /// Used for debugging purposes
     pub highlighted: bool,
 }
@@ -252,9 +252,9 @@ impl GraphTrace {
     pub fn highlight_connection(
         &mut self,
         source_node: NodeReflection,
-        source_output: Option<&'static TypeReflection>,
+        source_output: Option<&'static str>,
         target_node: NodeReflection,
-        target_input: Option<&'static TypeReflection>,
+        target_input: Option<&'static str>,
     ) {
         if let Some(conn) = self.connections.iter_mut().find(|conn| {
             conn.source_id == source_node
@@ -288,11 +288,11 @@ impl GraphTrace {
 
             // Define a node for each input port
             for input in node.inputs.iter() {
-                let field_name = input.name;
-                let ty = input.ty;
+                let field_name = input;
+                // TODO: Would really help to have type information here
                 writeln!(
                     &mut result,
-                    "        {}_in_{}[/\"{}: {ty}\"\\]",
+                    "        {}_in_{}[/\"{}\"\\]",
                     node.id.id,
                     field_name.replace(SANITIZER, "_"),
                     field_name
@@ -302,7 +302,7 @@ impl GraphTrace {
 
             // Define a node for each output port, unless this is a plain node.
             for output in node.outputs.iter() {
-                let field_name = output.name;
+                let field_name = output;
                 write!(
                     &mut result,
                     "        {}_out_{}[\\\"",
@@ -310,9 +310,8 @@ impl GraphTrace {
                     field_name.replace(SANITIZER, "_")
                 )
                 .unwrap();
-                write!(&mut result, "{}: ", field_name).unwrap();
-                let type_name = output.ty;
-                write!(&mut result, "{type_name}").unwrap();
+                write!(&mut result, "{}", field_name).unwrap();
+                // TODO: Would really help to have type information here
                 writeln!(&mut result, "\"/]").unwrap();
             }
 
@@ -329,8 +328,8 @@ impl GraphTrace {
 
         // Create the connections between nodes
         for (i, conn) in self.connections.iter().enumerate() {
-            let source_name = conn.source_output.map(|n| n.name).unwrap_or("_");
-            let target_name = conn.target_input.map(|n| n.name).unwrap_or("_");
+            let source_name = conn.source_output.unwrap_or("_");
+            let target_name = conn.target_input.unwrap_or("_");
 
             write!(
                 &mut result,

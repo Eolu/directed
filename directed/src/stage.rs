@@ -1,4 +1,4 @@
-use crate::{DynFields, TypeReflection};
+use crate::DynFields;
 use crate::{
     InjectionError,
     node::{AnyNode, Node},
@@ -16,8 +16,8 @@ pub enum RefType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StageShape {
     pub stage_name: &'static str,
-    pub inputs: &'static [TypeReflection],
-    pub outputs: &'static [TypeReflection],
+    pub inputs: &'static [&'static str],
+    pub outputs: &'static [&'static str],
 }
 
 /// Defines all the information about how a stage is handled.
@@ -66,8 +66,8 @@ pub trait Stage: Clone + 'static {
         &self,
         node: &mut Node<Self>,
         parent: &mut Box<dyn AnyNode>,
-        output: Option<&'static TypeReflection>,
-        input: Option<&'static TypeReflection>,
+        output: Option<&'static str>,
+        input: Option<&'static str>,
     ) -> Result<(), InjectionError>;
 }
 
@@ -128,8 +128,8 @@ impl Stage for () {
         &self,
         _: &mut Node<Self>,
         _: &mut Box<dyn AnyNode>,
-        _: Option<&'static TypeReflection>,
-        _: Option<&'static TypeReflection>,
+        _: Option<&'static str>,
+        _: Option<&'static str>,
     ) -> Result<(), InjectionError> {
         Ok(())
     }
@@ -154,21 +154,18 @@ impl<T: Send + Sync + Clone + 'static> Default for ValueWrapper<T> {
 }
 
 impl<T: Send + Sync + Clone + 'static> DynFields for ValueWrapper<T> {
-    fn field<'a>(
-        &'a self,
-        _: Option<&'static TypeReflection>,
-    ) -> Option<&'a (dyn std::any::Any + 'static)> {
+    fn field<'a>(&'a self, _: Option<&'static str>) -> Option<&'a (dyn std::any::Any + 'static)> {
         self.0.as_ref().map(|t| t as &dyn std::any::Any)
     }
 
     fn field_mut<'a>(
         &'a mut self,
-        _: Option<&'static TypeReflection>,
+        _: Option<&'static str>,
     ) -> Option<&'a mut (dyn std::any::Any + 'static)> {
         self.0.as_mut().map(|t| t as &mut dyn std::any::Any)
     }
 
-    fn take_field(&mut self, _: Option<&'static TypeReflection>) -> Option<Box<dyn std::any::Any>> {
+    fn take_field(&mut self, _: Option<&'static str>) -> Option<Box<dyn std::any::Any>> {
         self.0.take().map(|t| Box::new(t) as Box<dyn std::any::Any>)
     }
 
@@ -190,10 +187,7 @@ impl<T: Send + Sync + Clone + 'static> Stage for ValueStage<T> {
     const SHAPE: StageShape = StageShape {
         stage_name: "_",
         inputs: &[],
-        outputs: &[TypeReflection {
-            name: "_",
-            ty: "<unknown>",
-        }],
+        outputs: &["_"],
     };
     type State = ValueWrapper<T>;
     type Input = ();
@@ -219,8 +213,8 @@ impl<T: Send + Sync + Clone + 'static> Stage for ValueStage<T> {
         &self,
         _: &mut Node<Self>,
         _: &mut Box<dyn AnyNode>,
-        _: Option<&'static TypeReflection>,
-        _: Option<&'static TypeReflection>,
+        _: Option<&'static str>,
+        _: Option<&'static str>,
     ) -> Result<(), InjectionError> {
         Ok(())
     }

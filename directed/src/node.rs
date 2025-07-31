@@ -2,7 +2,7 @@
 use std::{any::Any, collections::HashMap};
 
 use crate::{
-    InjectionError, StageShape, TypeReflection,
+    InjectionError, StageShape,
     stage::{EvalStrategy, ReevaluationRule, Stage},
 };
 
@@ -66,8 +66,8 @@ pub trait AnyNode: Any + Send + Sync + 'static {
     fn flow_data(
         &mut self,
         child: &mut Box<dyn AnyNode>,
-        output: Option<&'static TypeReflection>,
-        input: Option<&'static TypeReflection>,
+        output: Option<&'static str>,
+        input: Option<&'static str>,
     ) -> Result<(), InjectionError>;
     /// Used to support `[Self::flow_data]`
     fn inputs_mut(&mut self) -> &mut dyn DynFields;
@@ -126,8 +126,8 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S> {
     fn flow_data(
         &mut self,
         child: &mut Box<dyn AnyNode>,
-        output: Option<&'static TypeReflection>,
-        input: Option<&'static TypeReflection>,
+        output: Option<&'static str>,
+        input: Option<&'static str>,
     ) -> Result<(), InjectionError> {
         self.stage.clone().inject_input(self, child, output, input)
     }
@@ -165,13 +165,13 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S> {
 pub trait DynFields: Any {
     fn field<'a>(
         &'a self,
-        field: Option<&'static TypeReflection>,
+        field: Option<&'static str>,
     ) -> Option<&'a (dyn Any + 'static)>;
     fn field_mut<'a>(
         &'a mut self,
-        field: Option<&'static TypeReflection>,
+        field: Option<&'static str>,
     ) -> Option<&'a mut (dyn Any + 'static)>;
-    fn take_field(&mut self, field: Option<&'static TypeReflection>) -> Option<Box<dyn Any>>;
+    fn take_field(&mut self, field: Option<&'static str>) -> Option<Box<dyn Any>>;
     fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
     /// Set all fields to `None`
     fn clear(&mut self);
@@ -179,33 +179,27 @@ pub trait DynFields: Any {
 
 #[cfg(feature = "tokio")]
 pub trait DynFields: Any + Send + Sync {
-    fn field<'a>(
-        &'a self,
-        field: Option<&'static TypeReflection>,
-    ) -> Option<&'a (dyn Any + 'static)>;
+    fn field<'a>(&'a self, field: Option<&'static str>) -> Option<&'a (dyn Any + 'static)>;
     fn field_mut<'a>(
         &'a mut self,
-        field: Option<&'static TypeReflection>,
+        field: Option<&'static str>,
     ) -> Option<&'a mut (dyn Any + 'static)>;
-    fn take_field(&mut self, field: Option<&'static TypeReflection>) -> Option<Box<dyn Any>>;
+    fn take_field(&mut self, field: Option<&'static str>) -> Option<Box<dyn Any>>;
     fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
     /// Set all fields to `None`
     fn clear(&mut self);
 }
 
 impl DynFields for () {
-    fn field<'a>(&'a self, _: Option<&'static TypeReflection>) -> Option<&'a (dyn Any + 'static)> {
+    fn field<'a>(&'a self, _: Option<&'static str>) -> Option<&'a (dyn Any + 'static)> {
         None
     }
 
-    fn field_mut<'a>(
-        &'a mut self,
-        _: Option<&'static TypeReflection>,
-    ) -> Option<&'a mut (dyn Any + 'static)> {
+    fn field_mut<'a>(&'a mut self, _: Option<&'static str>) -> Option<&'a mut (dyn Any + 'static)> {
         None
     }
 
-    fn take_field(&mut self, _: Option<&'static TypeReflection>) -> Option<Box<dyn Any>> {
+    fn take_field(&mut self, _: Option<&'static str>) -> Option<Box<dyn Any>> {
         None
     }
 

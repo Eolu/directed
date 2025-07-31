@@ -198,7 +198,7 @@ fn main() {
     // - node_1 will not evaluate again, and just pass a clone of its output to "input2" on node_2.
     // - node_2 will evaluate, printing its output then moving (no`t cloning) its output to node_3.
     // - node_3 will evaluate, printing its output that passing the assert successfully.
-    graph.execute(&mut registry).unwrap();
+    graph.execute(&mut registry, node_3).unwrap();
 }
 ```
 
@@ -229,7 +229,7 @@ let graph = graph! {
 }
 .unwrap();
 
-graph.execute(&mut registry).unwrap();
+graph.execute(&mut registry, node_1).unwrap();
 
 let outputs = registry.get_outputs(node_1);
 

@@ -10,7 +10,7 @@ mod stage;
 pub use async_trait::async_trait;
 pub use directed_stage_macro::stage;
 pub use error::*;
-pub use graphs::{EdgeInfo, Graph, TypeReflection};
+pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage, StageShape};
