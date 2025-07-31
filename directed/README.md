@@ -181,9 +181,8 @@ fn main() {
         connections: {
             // The below uses unnamed outputs only. Named outputs can be
             // indicated the same way as named inputs, `node_name: output_name`
-            node_1 => node_2: input,
-            node_1 => node_2: input2,
-            node_2 => node_3: input,
+            node_1 => {node_2: input, node_2: input2}
+            node_2 => {node_3: input}
             // It is also possible to make connections between nodes without
             // any data being passed between them by leaving out the names 
             // of both the input and output parameters:
@@ -202,6 +201,9 @@ fn main() {
     graph.execute(&mut registry).unwrap();
 }
 ```
+
+### Value Inputs
+- TODO: Docs for this
 
 As stated before, multiple graphs can be created from that same registry, executed in any order.
 
@@ -254,7 +256,6 @@ TODO: Add pallatable example. For now, [Take a look at this test for an example]
 
 ## WIP features/ideas/TODOs
 
-- The ability to clear state has been added to nodes. There now needs to be a way to represent that as a stage
 - Node checkout in async contexts needs more thought and guardrails.
 - Automatic validators to make sure correct input and output types are present if required, especially at runtime as an available API.
 - There is likely some more nuance to exactly where Send+Sync bounds belong

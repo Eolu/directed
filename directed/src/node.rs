@@ -2,7 +2,8 @@
 use std::{any::Any, collections::HashMap};
 
 use crate::{
-    stage::{EvalStrategy, ReevaluationRule, Stage}, InjectionError, StageShape, TypeReflection
+    InjectionError, StageShape, TypeReflection,
+    stage::{EvalStrategy, ReevaluationRule, Stage},
 };
 
 /// Every node wraps a Stage, which is a decorated function that has some
@@ -81,8 +82,7 @@ pub trait AnyNode: Any + Send + Sync + 'static {
 }
 
 #[cfg_attr(feature = "tokio", async_trait::async_trait)]
-impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
-{
+impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S> {
     fn stage_shape(&self) -> &'static StageShape {
         &S::SHAPE
     }
@@ -156,13 +156,17 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S>
         self.cache.clear();
         self.inputs.clear();
         self.outputs.clear();
+        self.input_changed = true;
     }
 }
 
 /// Trait to abstract over accessing and taking outputs from nodes
 #[cfg(not(feature = "tokio"))]
 pub trait DynFields: Any {
-    fn field<'a>(&'a self, field: Option<&'static TypeReflection>) -> Option<&'a (dyn Any + 'static)>;
+    fn field<'a>(
+        &'a self,
+        field: Option<&'static TypeReflection>,
+    ) -> Option<&'a (dyn Any + 'static)>;
     fn field_mut<'a>(
         &'a mut self,
         field: Option<&'static TypeReflection>,
@@ -175,7 +179,10 @@ pub trait DynFields: Any {
 
 #[cfg(feature = "tokio")]
 pub trait DynFields: Any + Send + Sync {
-    fn field<'a>(&'a self, field: Option<&'static TypeReflection>) -> Option<&'a (dyn Any + 'static)>;
+    fn field<'a>(
+        &'a self,
+        field: Option<&'static TypeReflection>,
+    ) -> Option<&'a (dyn Any + 'static)>;
     fn field_mut<'a>(
         &'a mut self,
         field: Option<&'static TypeReflection>,
@@ -184,4 +191,27 @@ pub trait DynFields: Any + Send + Sync {
     fn replace(&mut self, other: Box<dyn Any>) -> Box<dyn DynFields>;
     /// Set all fields to `None`
     fn clear(&mut self);
+}
+
+impl DynFields for () {
+    fn field<'a>(&'a self, _: Option<&'static TypeReflection>) -> Option<&'a (dyn Any + 'static)> {
+        None
+    }
+
+    fn field_mut<'a>(
+        &'a mut self,
+        _: Option<&'static TypeReflection>,
+    ) -> Option<&'a mut (dyn Any + 'static)> {
+        None
+    }
+
+    fn take_field(&mut self, _: Option<&'static TypeReflection>) -> Option<Box<dyn Any>> {
+        None
+    }
+
+    fn replace(&mut self, _: Box<dyn Any>) -> Box<dyn DynFields> {
+        Box::new(())
+    }
+
+    fn clear(&mut self) {}
 }

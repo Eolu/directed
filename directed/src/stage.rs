@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use crate::{DynFields, TypeReflection};
 use crate::{
     InjectionError,
     node::{AnyNode, Node},
 };
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum RefType {
@@ -94,4 +94,134 @@ pub enum ReevaluationRule {
     /// evaluate and just return a clone of the cached output associated with
     /// that exact set of inputs.
     CacheAll,
+}
+
+/// Empty version of a stage. Does nothing
+#[cfg_attr(feature = "tokio", async_trait::async_trait)]
+impl Stage for () {
+    const SHAPE: StageShape = StageShape {
+        stage_name: "()",
+        inputs: &[],
+        outputs: &[],
+    };
+    type State = ();
+    type Input = ();
+    type Output = ();
+    fn evaluate(
+        &self,
+        _: &mut Self::State,
+        _: &mut Self::Input,
+        _: &mut HashMap<u64, Vec<crate::Cached<Self>>>,
+    ) -> Result<Self::Output, InjectionError> {
+        Ok(())
+    }
+    #[cfg(feature = "tokio")]
+    async fn evaluate_async(
+        &self,
+        _: &mut Self::State,
+        _: &mut Self::Input,
+        _: &mut HashMap<u64, Vec<crate::Cached<Self>>>,
+    ) -> Result<Self::Output, InjectionError> {
+        Ok(())
+    }
+    fn inject_input(
+        &self,
+        _: &mut Node<Self>,
+        _: &mut Box<dyn AnyNode>,
+        _: Option<&'static TypeReflection>,
+        _: Option<&'static TypeReflection>,
+    ) -> Result<(), InjectionError> {
+        Ok(())
+    }
+}
+
+/// A stage that just returns a value. Currently this is somewhat naive and will always clone the value.
+#[derive(Clone, Copy)]
+pub struct ValueStage<T: Send + Sync + Clone + 'static>(std::marker::PhantomData<T>);
+impl<T: Send + Sync + Clone + 'static> ValueStage<T> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+/// Wrapper used by [`ValueStage`]
+#[derive(Clone)]
+pub struct ValueWrapper<T: Send + Sync + Clone + 'static>(pub Option<T>);
+impl<T: Send + Sync + Clone + 'static> Default for ValueWrapper<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<T: Send + Sync + Clone + 'static> DynFields for ValueWrapper<T> {
+    fn field<'a>(
+        &'a self,
+        _: Option<&'static TypeReflection>,
+    ) -> Option<&'a (dyn std::any::Any + 'static)> {
+        self.0.as_ref().map(|t| t as &dyn std::any::Any)
+    }
+
+    fn field_mut<'a>(
+        &'a mut self,
+        _: Option<&'static TypeReflection>,
+    ) -> Option<&'a mut (dyn std::any::Any + 'static)> {
+        self.0.as_mut().map(|t| t as &mut dyn std::any::Any)
+    }
+
+    fn take_field(&mut self, _: Option<&'static TypeReflection>) -> Option<Box<dyn std::any::Any>> {
+        self.0.take().map(|t| Box::new(t) as Box<dyn std::any::Any>)
+    }
+
+    fn replace(&mut self, other: Box<dyn std::any::Any>) -> Box<dyn DynFields> {
+        if let Ok(other) = other.downcast() {
+            Box::new(std::mem::replace(self, *other))
+        } else {
+            panic!("Attempted to replace value with wrong type")
+        }
+    }
+
+    fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
+#[cfg_attr(feature = "tokio", async_trait::async_trait)]
+impl<T: Send + Sync + Clone + 'static> Stage for ValueStage<T> {
+    const SHAPE: StageShape = StageShape {
+        stage_name: "_",
+        inputs: &[],
+        outputs: &[TypeReflection {
+            name: "_",
+            ty: "<unknown>",
+        }],
+    };
+    type State = ValueWrapper<T>;
+    type Input = ();
+    type Output = ValueWrapper<T>;
+    fn evaluate(
+        &self,
+        state: &mut Self::State,
+        _: &mut Self::Input,
+        _: &mut HashMap<u64, Vec<crate::Cached<Self>>>,
+    ) -> Result<Self::Output, InjectionError> {
+        Ok(state.clone())
+    }
+    #[cfg(feature = "tokio")]
+    async fn evaluate_async(
+        &self,
+        state: &mut Self::State,
+        _: &mut Self::Input,
+        _: &mut HashMap<u64, Vec<crate::Cached<Self>>>,
+    ) -> Result<Self::Output, InjectionError> {
+        Ok(state.clone())
+    }
+    fn inject_input(
+        &self,
+        _: &mut Node<Self>,
+        _: &mut Box<dyn AnyNode>,
+        _: Option<&'static TypeReflection>,
+        _: Option<&'static TypeReflection>,
+    ) -> Result<(), InjectionError> {
+        Ok(())
+    }
 }

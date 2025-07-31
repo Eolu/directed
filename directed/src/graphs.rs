@@ -5,14 +5,60 @@ use daggy::{Dag, EdgeIndex, NodeIndex, Walker};
 use std::collections::HashMap;
 
 use crate::{
-    EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace, NodeExecutionError,
-    NodeId, NodeNotFoundInGraphError, NodesNotFoundError, Stage,
+    DynFields, EdgeCreationError, EdgeNotFoundInGraphError, ErrorWithTrace, GraphTrace,
+    NodeExecutionError, NodeId, NodeIndexNotFoundInGraphError, NodesNotFoundError,
+    NodesNotFoundInGraphError, Stage,
     registry::{NodeReflection, Registry},
-    stage::{EvalStrategy, ReevaluationRule},
+    stage::ReevaluationRule,
 };
 
+/// Syntax sugar for building a graph
 #[macro_export]
-macro_rules! graph_internal {
+macro_rules! graph {
+    (
+        nodes: ($($nodes:expr),*),
+        connections: {
+            $(
+                $left_node:ident $( : $output:ident )? => {
+                    $(
+                        $right_node:ident $( : $input:ident )?
+                    ),* $(,)?
+                }
+            )*
+        }
+    ) => {{
+        #[allow(unused_mut)]
+        let mut graph = directed::Graph::from_node_ids(&[$($nodes.clone().into()),*]);
+
+        loop {
+            $(
+                __graph_edges!( graph, $left_node $( : $output )? ; $( $right_node $( : $input )? ),* );
+            )*
+            break Ok(graph) as Result<directed::Graph, directed::EdgeCreationError>;
+        }
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __graph_edges {
+    // • termination arm: no more RHS nodes
+    ( $g:ident, $left:ident $( : $out:ident )? ; ) => {};
+
+    // • process first RHS node, then recurse on the rest
+    ( $g:ident, $left:ident $( : $out:ident )? ;
+      $right:ident $( : $in:ident )? $( , $($rest:ident $( : $rin:ident )? )* )?
+    ) => {
+        if let Err(e) = __graph_internal!($g => $left $( : $out )? => $right $( : $in )?,) {
+            break Err(e);
+        }
+        // tail‑recursion on the remaining RHS nodes
+        __graph_edges!( $g, $left $( : $out )? ; $( $($rest $( : $rin )? )* )? );
+    };
+}
+
+#[macro_export]
+macro_rules! __graph_internal {
     // Connect named output to named input
     ($graph:expr => $left_node:ident: $output:ident => $right_node:ident: $input:ident,) => {
         $graph.connect(
@@ -58,29 +104,8 @@ macro_rules! graph_internal {
     };
 }
 
-/// Syntax sugar for building a graph
-#[macro_export]
-macro_rules! graph {
-    // Handle explicitly named inputs and outputs
-    (nodes: ($($nodes:expr),*), connections: { $($left_node:ident$(: $output:ident)? => $right_node:ident$(: $input:ident)?,)* }) => {
-        {
-            #[allow(unused_mut)]
-            let mut graph = directed::Graph::from_node_ids(&[$($nodes.into()),*]);
-            loop {
-                $(
-                    if let Err(e) = graph_internal!(graph => $left_node $(: $output)? => $right_node $(: $input)?,)
-                    {
-                        break Err(e);
-                    }
-                )*
-                break Ok(graph) as Result<directed::Graph, directed::EdgeCreationError>;
-            }
-        }
-    }
-}
-
 /// Used to reflect on types, important for node connections
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeReflection {
     pub name: &'static str,
     pub ty: &'static str,
@@ -130,7 +155,7 @@ impl Graph {
 
     /// Adds a new node to the graph, by its [`Registry`] index.
     pub fn add_node(&mut self, id: impl Into<NodeReflection>) -> NodeIndex {
-        let id = id.into();
+        let id: NodeReflection = id.into();
         let idx = self.dag.add_node(id);
         self.node_indices.insert(id, idx);
         idx
@@ -138,29 +163,21 @@ impl Graph {
 
     /// Connects the output of a node to the input of another node, resulting
     /// in a new graph edge. See [`Registry`]
-    pub fn connect<S0: Stage, S1: Stage>(
+    pub fn connect(
         &mut self,
-        from_id: NodeId<S0>,
-        to_id: NodeId<S1>,
+        from_id: impl Into<NodeReflection>,
+        to_id: impl Into<NodeReflection>,
         source_output: Option<&'static TypeReflection>,
         target_input: Option<&'static TypeReflection>,
     ) -> Result<(), EdgeCreationError> {
-        let from_idx = self
-            .node_indices
-            .get(&from_id.clone().into())
-            .ok_or_else(|| {
-                NodesNotFoundError::from(
-                    &[from_id.into()] as &[NodeReflection; 1] as &[NodeReflection]
-                )
-            })?;
-        let to_idx = self
-            .node_indices
-            .get(&to_id.clone().into())
-            .ok_or_else(|| {
-                NodesNotFoundError::from(
-                    &[to_id.into()] as &[NodeReflection; 1] as &[NodeReflection]
-                )
-            })?;
+        let from_id: NodeReflection = from_id.into();
+        let to_id: NodeReflection = to_id.into();
+        let from_idx = self.node_indices.get(&from_id).ok_or_else(|| {
+            NodesNotFoundInGraphError::from(&[from_id] as &[NodeReflection; 1] as &[NodeReflection])
+        })?;
+        let to_idx = self.node_indices.get(&to_id).ok_or_else(|| {
+            NodesNotFoundInGraphError::from(&[to_id] as &[NodeReflection; 1] as &[NodeReflection])
+        })?;
         self.dag
             .add_edge(
                 *from_idx,
@@ -179,65 +196,59 @@ impl Graph {
     /// operations. This will find any non-lazy nodes and execute each of them,
     /// recursively executing all dependencies first in order to satisfy their
     /// input requirements.
-    pub fn execute(
+    pub fn execute<'reg, S: Stage>(
         &self,
-        registry: &mut Registry,
-    ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
+        registry: &'reg mut Registry,
+        node_id: NodeId<S>,
+    ) -> Result<&'reg mut S::Output, ErrorWithTrace<NodeExecutionError>> {
         let top_trace = self.generate_trace(registry);
-        // Execute all urgent nodes (which will recursively execute dependencies)
-        for node_idx in self
-            .urgent_nodes(registry)
-            .map_err(ErrorWithTrace::from)
-            .map_err(|err| err.with_trace(top_trace.clone()))?
+        let node_id: NodeReflection = node_id.into();
+        let node_idx = self.node_indices.get(&node_id).ok_or(ErrorWithTrace::from(
+            NodeExecutionError::NodesNotFoundInRegistry(NodesNotFoundError::from(
+                &[node_id] as &[NodeReflection]
+            )),
+        ))?;
+        match (self.execute_node(*node_idx, top_trace.clone(), registry)? as &mut dyn std::any::Any)
+            .downcast_mut()
         {
-            self.execute_node(*node_idx, top_trace.clone(), registry)?;
+            Some(output) => Ok(output),
+            None => todo!("Create an error to represent when the output type is unexpected here"),
         }
-
-        Ok(())
     }
 
     /// Execute the graph asynchronously
+    /// TODO: Get this version to return some accessible form of the outputs
     #[cfg(feature = "tokio")]
-    pub async fn execute_async(
+    pub async fn execute_async<S: Stage>(
         self: std::sync::Arc<Self>,
         registry: tokio::sync::Mutex<Registry>,
+        node_id: NodeId<S>,
     ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
         let top_trace = self.generate_trace(&*registry.lock().await);
-
-        let urgent_nodes = self
-            .urgent_nodes(&*registry.lock().await)
-            .map_err(ErrorWithTrace::from)
-            .map_err(|err| err.with_trace(top_trace.clone()))?;
+        let node_id: NodeReflection = node_id.into();
+        let node_idx = self.node_indices.get(&node_id).ok_or(ErrorWithTrace::from(
+            NodeExecutionError::NodesNotFoundInRegistry(NodesNotFoundError::from(
+                &[node_id] as &[NodeReflection]
+            )),
+        ))?;
 
         // Guard the registry with a mutex
         let registry_ref = std::sync::Arc::new(registry);
 
         // Execute all urgent nodes (which will recursively execute dependencies)
-        let mut futures = Vec::new();
-        for node_idx in urgent_nodes {
-            futures.push(self.clone().execute_node_async(
-                *node_idx,
-                top_trace.clone(),
-                registry_ref.clone(),
-            ));
-        }
-
-        // Wait for all tasks to complete
-        for future in futures {
-            future.await?;
-        }
-
-        Ok(())
+        self.clone()
+            .execute_node_async(*node_idx, top_trace.clone(), registry_ref.clone())
+            .await
     }
 
     /// Execute a single node's stage within the graph. This will recursively execute
     /// all dependant parent nodes.
-    fn execute_node(
+    fn execute_node<'reg>(
         &self,
         idx: NodeIndex,
         top_trace: GraphTrace,
-        registry: &mut Registry,
-    ) -> Result<(), ErrorWithTrace<NodeExecutionError>> {
+        registry: &'reg mut Registry,
+    ) -> Result<&'reg mut dyn DynFields, ErrorWithTrace<NodeExecutionError>> {
         // Get the node ID
         let node_id = self
             .get_node_id_from_node_index(idx)
@@ -280,7 +291,7 @@ impl Graph {
             node.set_input_changed(false);
         }
 
-        Ok(())
+        Ok(node.outputs_mut())
     }
 
     /// Execute a single node's stage asynchronously within the graph. This will recursively execute
@@ -334,9 +345,10 @@ impl Graph {
             let mut node_availability = {
                 let registry = registry.lock().await;
                 registry.node_availability(node_id).ok_or_else(|| {
-                    ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
-                        &[node_id.into()] as &[NodeReflection],
-                    )))
+                    ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(&[
+                        node_id.into(),
+                    ]
+                        as &[NodeReflection])))
                     .with_trace(top_trace.clone())
                 })?
             };
@@ -345,9 +357,10 @@ impl Graph {
             let mut registry = registry.lock().await;
             // Determine if we need to evaluate
             registry.take_node(node_id).await.ok_or_else(|| {
-                ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(
-                    &[node_id.into()] as &[NodeReflection],
-                )))
+                ErrorWithTrace::from(NodeExecutionError::from(NodesNotFoundError::from(&[
+                    node_id.into()
+                ]
+                    as &[NodeReflection])))
                 .with_trace(top_trace)
             })?
         };
@@ -357,15 +370,15 @@ impl Graph {
             // Evaluate asynchronously
             // TODO: Do someting with output
 
-            let _ = node.eval_async().await.map_err(|err| {
-                ErrorWithTrace::from(NodeExecutionError::from(err))
-            })?;
+            let _ = node
+                .eval_async()
+                .await
+                .map_err(|err| ErrorWithTrace::from(NodeExecutionError::from(err)))?;
 
             node.set_input_changed(false);
         }
 
         // Eval is done, reinsert node
-        let name = node.stage_shape().stage_name;
         registry.lock().await.replace_node(node_id, node);
 
         Ok(())
@@ -387,9 +400,9 @@ impl Graph {
                 .dag
                 .node_weight(parent_idx)
                 .ok_or_else(|| {
-                    ErrorWithTrace::from(NodeExecutionError::from(NodeNotFoundInGraphError::from(
-                        parent_idx,
-                    )))
+                    ErrorWithTrace::from(NodeExecutionError::from(
+                        NodeIndexNotFoundInGraphError::from(parent_idx),
+                    ))
                 })
                 .map_err(|err| err.with_trace(top_trace.clone()))?;
 
@@ -436,40 +449,13 @@ impl Graph {
         Ok(())
     }
 
-    /// Builds a vec of all non-lazy nodes in the graph. On evaluation, these are evaluated in order
-    fn urgent_nodes<'s>(
-        &'s self,
-        registry: &Registry,
-    ) -> Result<Vec<&'s NodeIndex>, NodeExecutionError> {
-        let mut urgent_nodes = Vec::new();
-        for (_, idx) in &self.node_indices {
-            let node_id = *self
-                .dag
-                .node_weight(*idx)
-                .ok_or_else(|| NodeExecutionError::from(NodeNotFoundInGraphError::from(*idx)))?;
-
-            let node = match registry.get_node_any(node_id) {
-                Some(node) => node,
-                None => {
-                    return Err(NodeExecutionError::from(NodesNotFoundError::from(
-                        &[node_id] as &[NodeReflection],
-                    )));
-                }
-            };
-            if node.eval_strategy() == EvalStrategy::Urgent {
-                urgent_nodes.push(idx);
-            }
-        }
-        Ok(urgent_nodes)
-    }
-
     fn get_node_id_from_node_index(
         &self,
         idx: NodeIndex,
-    ) -> Result<NodeReflection, NodeNotFoundInGraphError> {
+    ) -> Result<NodeReflection, NodeIndexNotFoundInGraphError> {
         self.dag
             .node_weight(idx)
-            .map(|n| *n)
-            .ok_or_else(|| NodeNotFoundInGraphError::from(idx))
+            .and_then(|n| Some(*n))
+            .ok_or_else(|| NodeIndexNotFoundInGraphError::from(idx))
     }
 }

@@ -6,14 +6,14 @@ mod registry;
 mod stage;
 
 // TODO: Separate out internal-only interfaces
+#[cfg(feature = "tokio")]
+pub use async_trait::async_trait;
 pub use directed_stage_macro::stage;
 pub use error::*;
 pub use graphs::{EdgeInfo, Graph, TypeReflection};
 pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
 pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage, StageShape};
-#[cfg(feature = "tokio")]
-pub use async_trait::async_trait;
 
 /// Simple macro to simulate a function that can return multiple names outputs
 #[macro_export]
@@ -61,10 +61,12 @@ mod tests {
             input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
         }
 
-        #[stage(cache_last)]
-        fn TinyStage3(input: String) {
+        #[stage(cache_last, out(final_output: String))]
+        fn TinyStage3(input: String) -> String {
             println!("Running stage 3");
-            assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
+            output! {
+                final_output: input
+            }
         }
 
         let mut registry = Registry::new();
@@ -74,14 +76,52 @@ mod tests {
         let graph = graph! {
             nodes: (node_1, node_2, node_3),
             connections: {
-                node_1 => node_2: input,
-                node_1 => node_2: input2,
-                node_2 => node_3: input,
+                node_1 => {node_2: input, node_2: input2}
+                node_2 => {node_3: input}
             }
         }
         .unwrap();
 
-        graph.execute(&mut registry).unwrap();
+        assert_eq!(
+            graph
+                .execute(&mut registry, node_3)
+                .unwrap()
+                .final_output
+                .take()
+                .unwrap(),
+            format!("THIS IS THE OUTPUT! [19 chars]")
+        );
+    }
+
+    /// A simple sanity-check test that doesn't try anything interesting
+    #[test]
+    fn value_stage_test() {
+        #[stage]
+        fn PassthroughStage(input: String) -> String {
+            println!("Running PassthroughStage");
+            input
+        }
+
+        let mut registry = Registry::new();
+        let node = registry.register(PassthroughStage);
+        let input = registry.value(String::from("This is an input value"));
+        let graph = graph! {
+            nodes: (input, node),
+            connections: {
+                input => {node: input}
+            }
+        }
+        .unwrap();
+
+        assert_eq!(
+            graph
+                .execute(&mut registry, node)
+                .unwrap()
+                .0
+                .take()
+                .unwrap(),
+            format!("This is an input value")
+        );
     }
 
     /// Test a stage that takes a value in by reference
@@ -112,16 +152,15 @@ mod tests {
         let graph = graph! {
             nodes: (node_1, node_2, node_3),
             connections: {
-                node_1 => node_2: input,
-                node_1 => node_2: input2,
-                node_2 => node_3: input,
+                node_1 => {node_2: input, node_2: input2}
+                node_2 => {node_3: input}
             }
         }
         .unwrap();
 
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, node_3).unwrap();
 
-        // Now make saure it fails when caching is disabled
+        // Now make sure it fails when caching is disabled
 
         #[stage(lazy)]
         fn TinyStageNoCache() -> String {
@@ -134,20 +173,19 @@ mod tests {
         let graph = graph! {
             nodes: (node_1, node_2, node_3),
             connections: {
-                node_1 => node_2: input,
-                node_1 => node_2: input2,
-                node_2 => node_3: input,
+                node_1 => {node_2: input, node_2: input2}
+                node_2 => {node_3: input}
             }
         }
         .unwrap();
 
-        assert!(graph.execute(&mut registry).is_err())
+        assert!(graph.execute(&mut registry, node_3).is_err())
     }
 
     // Test multiple output stages
     #[test]
     fn multiple_output_stage_test() {
-        #[stage(out(number: i32, text: String))]
+        #[stage(cache_last, out(number: i32, text: String))]
         fn MultiOutputStage() -> _ {
             let value1 = 42;
             let value2 = String::from("Hello");
@@ -175,13 +213,14 @@ mod tests {
         let graph = graph! {
             nodes: (producer, consumer1, consumer2),
             connections: {
-                producer: number => consumer1: number,
-                producer: text => consumer2: text,
+                producer: number => {consumer1: number}
+                producer: text => {consumer2: text}
             }
         }
         .unwrap();
 
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, consumer1).unwrap();
+        graph.execute(&mut registry, consumer2).unwrap();
     }
 
     // Test evaluating lazy vs urgent nodes
@@ -208,7 +247,7 @@ mod tests {
         let graph = graph! {
             nodes: (lazy_node, urgent_node),
             connections: {
-                lazy_node => urgent_node: input,
+                lazy_node => {urgent_node: input}
             }
         }
         .unwrap();
@@ -217,7 +256,7 @@ mod tests {
         COUNTER.store(0, Ordering::SeqCst);
 
         // Execute should evaluate LazyStage because UrgentStage depends on it
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, urgent_node).unwrap();
     }
 
     // Test transparent vs opaque reevaluation rules
@@ -262,10 +301,9 @@ mod tests {
         let graph = graph! {
             nodes: (source, transparent, opaque, sink),
             connections: {
-                source => transparent: input,
-                source => opaque: input,
-                transparent => sink: t_input,
-                opaque => sink: o_input,
+                source => {transparent: input, opaque: input}
+                transparent => {sink: t_input}
+                opaque => {sink: o_input}
             }
         }
         .unwrap();
@@ -275,12 +313,12 @@ mod tests {
         OPAQUE_COUNTER.store(0, Ordering::SeqCst);
 
         // First execution
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, sink).unwrap();
         assert_eq!(TRANSPARENT_COUNTER.load(Ordering::SeqCst), 1);
         assert_eq!(OPAQUE_COUNTER.load(Ordering::SeqCst), 1);
 
         // Second execution - transparent stage shouldn't execute again since inputs haven't changed
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, sink).unwrap();
         assert_eq!(TRANSPARENT_COUNTER.load(Ordering::SeqCst), 1); // Still 1
         assert_eq!(OPAQUE_COUNTER.load(Ordering::SeqCst), 2); // Increased to 2
     }
@@ -306,8 +344,8 @@ mod tests {
         let result = graph! {
             nodes: (node_a, node_b),
             connections: {
-                node_a => node_b: input,
-                node_b => node_a: input,
+                node_a => {node_b: input}
+                node_b => {node_a: input}
             }
         };
 
@@ -378,13 +416,13 @@ mod tests {
         let graph = graph! {
             nodes: (producer, consumer),
             connections: {
-                producer => consumer: input,
+                producer => {consumer: input}
             }
         }
         .unwrap();
 
         // Execution should fail due to type mismatch when flowing data
-        let result = graph.execute(&mut registry);
+        let result = graph.execute(&mut registry, consumer);
         assert!(result.is_err());
     }
 
@@ -410,13 +448,13 @@ mod tests {
         let graph = graph! {
             nodes: (producer, consumer),
             connections: {
-                producer => consumer: input1,
+                producer => {consumer: input1}
             }
         }
         .unwrap();
 
         // Execution should fail due to missing input
-        let result = graph.execute(&mut registry);
+        let result = graph.execute(&mut registry, consumer);
         assert!(result.is_err());
     }
 
@@ -453,15 +491,14 @@ mod tests {
         let graph = graph! {
             nodes: (source, path_a, path_b, sink),
             connections: {
-                source => path_a: input,
-                source => path_b: input,
-                path_a => sink: a,
-                path_b => sink: b,
+                source => {path_a: input, path_b: input}
+                path_a => {sink: a}
+                path_b => {sink: b}
             }
         }
         .unwrap();
 
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, sink).unwrap();
     }
 
     /// Test nodes with internal state
@@ -487,10 +524,10 @@ mod tests {
         .unwrap();
 
         // TODO: Actually return results so this test can be real (right now it would pass if state never updated)
-        graph.execute(&mut registry).unwrap();
-        graph.execute(&mut registry).unwrap();
-        graph.execute(&mut registry).unwrap();
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, node).unwrap();
+        graph.execute(&mut registry, node).unwrap();
+        graph.execute(&mut registry, node).unwrap();
+        graph.execute(&mut registry, node).unwrap();
     }
 
     // Test the output! macro
@@ -524,14 +561,14 @@ mod tests {
         let graph = graph! {
             nodes: (producer, consumer),
             connections: {
-                producer: number => consumer: num,
-                producer: text => consumer: txt,
-                producer: vector => consumer: vect,
+                producer: number => {consumer: num}
+                producer: text => {consumer: txt}
+                producer: vector => {consumer: vect}
             }
         }
         .unwrap();
 
-        graph.execute(&mut registry).unwrap();
+        graph.execute(&mut registry, consumer).unwrap();
     }
 
     // Test registry node type validation
@@ -610,34 +647,32 @@ mod tests {
         let graph1 = graph! {
             nodes: (node_1, node_2, node_3),
             connections: {
-                node_1 => node_2: input,
-                node_1 => node_2: input2,
-                node_2 => node_3: input,
+                node_1 => {node_2: input, node_2: input2}
+                node_2 => {node_3: input}
             }
         }
         .unwrap();
 
-        graph1.execute(&mut registry).unwrap();
+        graph1.execute(&mut registry, node_3).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
-        graph1.execute(&mut registry).unwrap();
+        graph1.execute(&mut registry, node_3).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
 
         // Now with a modified graph, but same stage 2
         let graph2 = graph! {
             nodes: (node_1_alt, node_2, node_3_alt),
             connections: {
-                node_1_alt => node_2: input,
-                node_1_alt => node_2: input2,
-                node_2 => node_3_alt: input,
+                node_1_alt => {node_2: input, node_2: input2}
+                node_2 => {node_3_alt: input}
             }
         }
         .unwrap();
 
-        graph2.execute(&mut registry).unwrap();
+        graph2.execute(&mut registry, node_3_alt).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-        graph2.execute(&mut registry).unwrap();
+        graph2.execute(&mut registry, node_3_alt).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-        graph1.execute(&mut registry).unwrap();
+        graph1.execute(&mut registry, node_3).unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
     }
 
@@ -645,23 +680,24 @@ mod tests {
     #[test]
     fn blank_connections_test() {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        #[stage(lazy)]
+        #[stage(lazy, cache_last)]
         fn TinyStage1() {
             println!("Running stage 1");
+            assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
             COUNTER.fetch_add(1, Ordering::SeqCst);
         }
 
-        #[stage(lazy)]
+        #[stage(lazy, cache_last)]
         fn TinyStage2() {
             println!("Running stage 2");
-            assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+            assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
             COUNTER.fetch_add(1, Ordering::SeqCst);
         }
 
         #[stage]
         fn TinyStage3() {
             println!("Running stage 3");
-            assert_eq!(COUNTER.load(Ordering::SeqCst), 3);
+            assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
             COUNTER.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -672,15 +708,14 @@ mod tests {
         let graph = graph! {
             nodes: (node_1, node_2, node_3),
             connections: {
-                node_1 => node_2,
-                node_2 => node_3,
-                node_1 => node_3,
+                node_1 => {node_2, node_3}
+                node_2 => {node_3}
             }
         }
         .unwrap();
 
-        graph.execute(&mut registry).unwrap();
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+        graph.execute(&mut registry, node_3).unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 3);
     }
 
     // TODO: Specific test for trace generation
@@ -726,15 +761,17 @@ mod async_tests {
         }
 
         let mut registry = Registry::new();
-        let stage1 = registry.register_with_state(SlowStage1, state!(SlowStage1 { tx: tx1, rx: rx2 }));
-        let stage2 = registry.register_with_state(SlowStage2, state!(SlowStage2 { tx: tx2, rx: rx1 }));
+        let stage1 =
+            registry.register_with_state(SlowStage1, state!(SlowStage1 { tx: tx1, rx: rx2 }));
+        let stage2 =
+            registry.register_with_state(SlowStage2, state!(SlowStage2 { tx: tx2, rx: rx1 }));
         let combine = registry.register(CombineStage);
 
         let graph = graph! {
             nodes: (stage1, stage2, combine),
             connections: {
-                stage1 => combine: as_num,
-                stage2 => combine: as_text,
+                stage1 => {combine: as_num}
+                stage2 => {combine: as_text}
             }
         }
         .unwrap();
@@ -744,7 +781,7 @@ mod async_tests {
         COUNTER.store(0, Ordering::SeqCst);
 
         graph
-            .execute_async(tokio::sync::Mutex::new(registry))
+            .execute_async(tokio::sync::Mutex::new(registry), combine)
             .await
             .unwrap();
 

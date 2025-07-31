@@ -1,5 +1,5 @@
 //! Errors and the graph trace system
-use crate::{TypeReflection, registry::NodeReflection, AnyNode, Graph, Registry};
+use crate::{AnyNode, Graph, Registry, TypeReflection, registry::NodeReflection};
 use std::fmt::{self, Display, Formatter, Write};
 
 /// Wrapper error type, wraps errors from this crate and stores a graph information with them.
@@ -27,7 +27,7 @@ pub enum NodeExecutionError {
     #[error(transparent)]
     NodesNotFoundInRegistry(#[from] NodesNotFoundError),
     #[error(transparent)]
-    NodeNotFoundInGraph(#[from] NodeNotFoundInGraphError),
+    NodeNotFoundInGraph(#[from] NodeIndexNotFoundInGraphError),
     #[error(transparent)]
     EdgeNotFoundInGraph(#[from] EdgeNotFoundInGraphError),
     #[error(transparent)]
@@ -48,7 +48,7 @@ pub enum RegistryError {
 #[derive(thiserror::Error, Debug)]
 pub enum EdgeCreationError {
     #[error(transparent)]
-    NodesNotFound(#[from] NodesNotFoundError),
+    NodesNotFound(#[from] NodesNotFoundInGraphError),
     #[error(transparent)]
     CycleError(daggy::WouldCycle<crate::EdgeInfo>),
 }
@@ -61,7 +61,7 @@ pub struct NodeTypeMismatchError {
 }
 
 #[derive(thiserror::Error, Debug)]
-#[error("Nodes with id `{0:?}` not found in registry")]
+#[error("Nodes with id `{0:?}` not found")]
 pub struct NodesNotFoundError(Vec<NodeReflection>);
 
 impl From<&[NodeReflection]> for NodesNotFoundError {
@@ -71,10 +71,20 @@ impl From<&[NodeReflection]> for NodesNotFoundError {
 }
 
 #[derive(thiserror::Error, Debug)]
-#[error("Node with index `{0:?}` not found in graph")]
-pub struct NodeNotFoundInGraphError(daggy::NodeIndex);
+#[error("Nodes `{0:?}` not found in graph")]
+pub struct NodesNotFoundInGraphError(Vec<NodeReflection>);
 
-impl From<daggy::NodeIndex> for NodeNotFoundInGraphError {
+impl From<&[NodeReflection]> for NodesNotFoundInGraphError {
+    fn from(value: &[NodeReflection]) -> Self {
+        Self(Vec::from(value))
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("Node with index `{0:?}` not found in graph")]
+pub struct NodeIndexNotFoundInGraphError(daggy::NodeIndex);
+
+impl From<daggy::NodeIndex> for NodeIndexNotFoundInGraphError {
     fn from(value: daggy::NodeIndex) -> Self {
         Self(value)
     }
@@ -178,7 +188,7 @@ impl Graph {
         let mut connections = Vec::new();
 
         // Add node information
-        for (&id, _) in &self.node_indices {
+        for id in self.node_indices.iter().filter_map(|(id, _)| Some(*id)) {
             if let Some(node) = registry.get_node_by_id(id) {
                 let stage_shape = node.stage_shape();
                 let node_info = NodeInfo {
@@ -202,13 +212,15 @@ impl Graph {
                 .node_indices
                 .iter()
                 .find(|(_, idx)| **idx == source_idx)
-                .map(|(&id, _)| id);
+                .map(|(id, _)| Some(*id))
+                .flatten();
 
             let target_id = self
                 .node_indices
                 .iter()
                 .find(|(_, idx)| **idx == target_idx)
-                .map(|(&id, _)| id);
+                .map(|(id, _)| Some(*id))
+                .flatten();
 
             if let (Some(source_id), Some(target_id)) = (source_id, target_id) {
                 let source_output = edge.weight.source_output;

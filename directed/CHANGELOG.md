@@ -1,3 +1,7 @@
+# 0.3.0
+- New, more clear graph syntax
+- Can now turn values directly into simple node inputs in the graph
+
 # 0.2.7
 - Got async working
 

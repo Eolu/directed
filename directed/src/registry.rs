@@ -3,10 +3,8 @@
 use crate::{
     NodeTypeMismatchError, NodesNotFoundError, RegistryError,
     node::{AnyNode, Node},
-    stage::{Stage, StageShape},
+    stage::{Stage, StageShape, ValueStage, ValueWrapper},
 };
-#[cfg(feature = "tokio")]
-use std::sync::Arc;
 use std::{any::TypeId, marker::PhantomData};
 
 /// Used to access nodes within the registry, just a simple `usize` alias
@@ -69,14 +67,21 @@ impl Ord for NodeReflection {
 /// A [Registry] stores each node, its state, and the logical [Stage]
 /// associated with it.
 pub struct Registry(
-    pub(super) Vec<Option<Box<dyn AnyNode>>>, 
-    #[cfg(feature = "tokio")] pub(super) Vec<(tokio::sync::watch::Sender<bool>, tokio::sync::watch::Receiver<bool>)>
+    pub(super) Vec<Option<Box<dyn AnyNode>>>,
+    #[cfg(feature = "tokio")]
+    pub(super)  Vec<(
+        tokio::sync::watch::Sender<bool>,
+        tokio::sync::watch::Receiver<bool>,
+    )>,
 );
 
 impl Registry {
-
     pub fn new() -> Self {
-        Self(Vec::new(), #[cfg(feature = "tokio")] Vec::new())
+        Self(
+            Vec::new(),
+            #[cfg(feature = "tokio")]
+            Vec::new(),
+        )
     }
 
     /// Get a reference to the state of a specific node.
@@ -123,6 +128,19 @@ impl Registry {
         }
     }
 
+    /// Same as [Self::register], but creates a simple stage that just outputs the
+    /// value given
+    pub fn value<T: Send + Sync + Clone + 'static>(&mut self, value: T) -> NodeId<ValueStage<T>> {
+        let next = self.0.len();
+        self.0.push(Some(Box::new(Node::new(
+            ValueStage::<T>::new(),
+            ValueWrapper(Some(value)),
+        ))));
+        #[cfg(feature = "tokio")]
+        self.1.push(tokio::sync::watch::channel(true));
+        NodeId(next, PhantomData)
+    }
+
     /// Add a node to the registry. This returns a unique identifier for that
     /// node, which can be used to add it to a [crate::Graph]. This uses default
     /// state
@@ -147,8 +165,7 @@ impl Registry {
         &mut self,
         stage: S,
         state: S::State,
-    ) -> NodeId<S>
-    {
+    ) -> NodeId<S> {
         let next = self.0.len();
         self.0.push(Some(Box::new(Node::new(stage, state))));
         #[cfg(feature = "tokio")]
@@ -245,7 +262,10 @@ impl Registry {
     }
 
     /// Get a mutable type-erased node
-    pub fn get_node_any_mut(&mut self, id: impl Into<NodeReflection>) -> Option<&mut Box<dyn AnyNode>> {
+    pub fn get_node_any_mut(
+        &mut self,
+        id: impl Into<NodeReflection>,
+    ) -> Option<&mut Box<dyn AnyNode>> {
         match self.0.get_mut(id.into().id) {
             Some(Some(node)) => Some(node),
             // TODO: Handle Some(None) as a special case, as this means the node is busy
@@ -314,7 +334,10 @@ impl Registry {
 
     /// Used to await node availability
     #[cfg(feature = "tokio")]
-    pub fn node_availability(&self, id: NodeReflection) -> Option<tokio::sync::watch::Receiver<bool>> {
+    pub fn node_availability(
+        &self,
+        id: NodeReflection,
+    ) -> Option<tokio::sync::watch::Receiver<bool>> {
         match self.1.get(id.id) {
             Some((_, rx)) => Some(rx.clone()),
             None => None,
@@ -334,12 +357,12 @@ impl Registry {
                         // TODO: Handle errors sanely
                         self.1.get_mut(id.id).unwrap().0.send(false).unwrap();
                         Some(node)
-                    },
+                    }
                     None => {
                         panic!("TODO: Handle missing node")
-                    },
+                    }
                 }
-            },
+            }
             None => None,
         }
     }
@@ -359,7 +382,10 @@ impl Registry {
     }
 
     /// Gets a mutable reference to the inputs from a node
-    pub fn get_inputs_mut<S: Stage + 'static>(&mut self, node_id: NodeId<S>) -> Option<&mut S::Input> {
+    pub fn get_inputs_mut<S: Stage + 'static>(
+        &mut self,
+        node_id: NodeId<S>,
+    ) -> Option<&mut S::Input> {
         self.get_node_mut(node_id).map(|node| &mut node.inputs)
     }
 
@@ -369,7 +395,10 @@ impl Registry {
     }
 
     /// Gets a mutable reference to the outputs from a node
-    pub fn get_outputs_mut<S: Stage + 'static>(&mut self, node_id: NodeId<S>) -> Option<&mut S::Output> {
+    pub fn get_outputs_mut<S: Stage + 'static>(
+        &mut self,
+        node_id: NodeId<S>,
+    ) -> Option<&mut S::Output> {
         self.get_node_mut(node_id).map(|node| &mut node.outputs)
     }
 }
