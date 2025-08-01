@@ -52,10 +52,6 @@ pub trait Stage: Clone + 'static {
         cache: &mut HashMap<u64, Vec<crate::Cached<Self>>>,
     ) -> Result<Self::Output, InjectionError>;
 
-    fn eval_strategy(&self) -> EvalStrategy {
-        EvalStrategy::Lazy
-    }
-
     fn reeval_rule(&self) -> ReevaluationRule {
         ReevaluationRule::Move
     }
@@ -69,15 +65,6 @@ pub trait Stage: Clone + 'static {
         output: Option<&'static str>,
         input: Option<&'static str>,
     ) -> Result<(), InjectionError>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvalStrategy {
-    /// Only evaluate when necessary to evaluate an "Urgent" stage.
-    Lazy,
-    /// Evaluate as soon as possible. There must be at least 1 "Urgent" stage
-    /// for anything to execute at all.
-    Urgent,
 }
 
 #[repr(u8)]

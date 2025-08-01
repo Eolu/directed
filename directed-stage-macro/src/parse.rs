@@ -10,7 +10,6 @@ use syn::{
 pub(crate) struct StageConfig {
     pub(crate) original_fn: syn::ItemFn,
     pub(crate) stage_name: syn::Ident,
-    pub(crate) is_lazy: (bool, Span),
     pub(crate) is_async: (bool, Span),
     pub(crate) cache_strategy: (CacheStrategy, Span),
     pub(crate) outputs: OutputParams,
@@ -188,7 +187,6 @@ impl StageConfig {
             input_fn.sig.asyncness.is_some(),
             input_fn.sig.asyncness.span(),
         );
-        let mut is_lazy = (false, Span::call_site());
         let mut cache_strategy = (CacheStrategy::None, Span::call_site());
         let mut outputs = match &input_fn.sig.output {
             syn::ReturnType::Default => OutputParams::Implicit(
@@ -206,7 +204,6 @@ impl StageConfig {
         for arg in meta_args.args.iter() {
             match arg {
                 StageArg::Flag(ident) => match ident.to_string().as_str() {
-                    "lazy" => is_lazy = (true, ident.span()),
                     "cache_last" => cache_strategy = (CacheStrategy::Last, ident.span()),
                     "cache_all" => cache_strategy = (CacheStrategy::All, ident.span()),
                     unknown => {
@@ -247,7 +244,6 @@ impl StageConfig {
         Ok(StageConfig {
             original_fn: input_fn.clone(),
             stage_name,
-            is_lazy,
             is_async,
             cache_strategy,
             outputs,

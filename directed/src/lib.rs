@@ -13,7 +13,7 @@ pub use error::*;
 pub use graphs::{EdgeInfo, Graph};
 pub use node::{AnyNode, Cached, DynFields, Node};
 pub use registry::{NodeId, Registry};
-pub use stage::{EvalStrategy, ReevaluationRule, RefType, Stage, StageShape};
+pub use stage::{ReevaluationRule, RefType, Stage, StageShape};
 
 /// Simple macro to simulate a function that can return multiple names outputs
 #[macro_export]
@@ -49,13 +49,13 @@ mod tests {
     /// A simple sanity-check test that doesn't try anything interesting
     #[test]
     fn basic_macro_test() {
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn TinyStage1() -> String {
             println!("Running stage 1");
             String::from("This is the output!")
         }
 
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn TinyStage2(input: String, input2: String) -> String {
             println!("Running stage 2");
             input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
@@ -127,13 +127,13 @@ mod tests {
     /// Test a stage that takes a value in by reference
     #[test]
     fn inject_transparent_out_to_opaque_ref_in_test() {
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn TinyStage1() -> String {
             println!("Running stage 1");
             String::from("This is the output!")
         }
 
-        #[stage(lazy)]
+        #[stage]
         fn TinyStage2(input: String, input2: String) -> String {
             println!("Running stage 2");
             input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars]"
@@ -162,7 +162,7 @@ mod tests {
 
         // Now make sure it fails when caching is disabled
 
-        #[stage(lazy)]
+        #[stage]
         fn TinyStageNoCache() -> String {
             println!("Running stage 1");
             String::from("This is the output!")
@@ -228,7 +228,7 @@ mod tests {
     fn lazy_and_urgent_eval_test() {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn LazyStage() -> i32 {
             COUNTER.fetch_add(1, Ordering::SeqCst);
             42
@@ -265,20 +265,20 @@ mod tests {
         static TRANSPARENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
         static OPAQUE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn SourceStage() -> i32 {
             println!("SourceStage");
             42
         }
 
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn TransparentStage(input: i32) -> i32 {
             println!("TransparentStage");
             TRANSPARENT_COUNTER.fetch_add(1, Ordering::SeqCst);
             input * 2
         }
 
-        #[stage(lazy)]
+        #[stage]
         fn OpaqueStage(input: &i32) -> i32 {
             println!("OpaqueStage");
             OPAQUE_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -383,11 +383,10 @@ mod tests {
         assert!(registry.get_node_any_mut(node_id).is_some());
 
         // Unregister
-        let node = registry
+        registry
             .unregister::<SimpleStage>(node_id.into())
             .unwrap()
             .unwrap();
-        assert!(node.stage.eval_strategy() == EvalStrategy::Urgent);
 
         // Node no longer exists
         assert!(registry.get_node_any(node_id).is_none());
@@ -604,14 +603,14 @@ mod tests {
     fn basic_cache_all_test() {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-        #[stage(lazy, cache_all)]
+        #[stage(cache_all)]
         fn CacheStage1() -> String {
             println!("Running stage 1");
             COUNTER.fetch_add(1, Ordering::SeqCst);
             String::from("This is the output!")
         }
 
-        #[stage(lazy, cache_all)]
+        #[stage(cache_all)]
         fn CacheStage2(input: String, input2: String) -> String {
             println!("Running stage 2");
             COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -624,7 +623,7 @@ mod tests {
             assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
         }
 
-        #[stage(lazy, cache_all)]
+        #[stage(cache_all)]
         fn CacheStage1Alternate() -> String {
             println!("Running alt stage 1");
             COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -680,14 +679,14 @@ mod tests {
     #[test]
     fn blank_connections_test() {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn TinyStage1() {
             println!("Running stage 1");
             assert_eq!(COUNTER.load(Ordering::SeqCst), 0);
             COUNTER.fetch_add(1, Ordering::SeqCst);
         }
 
-        #[stage(lazy, cache_last)]
+        #[stage(cache_last)]
         fn TinyStage2() {
             println!("Running stage 2");
             assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
@@ -736,7 +735,7 @@ mod async_tests {
         let (tx1, rx1) = unbounded_channel::<u8>();
         let (tx2, rx2) = unbounded_channel::<u8>();
 
-        #[stage(lazy, state(tx: UnboundedSender<u8>, rx: UnboundedReceiver<u8>))]
+        #[stage(state(tx: UnboundedSender<u8>, rx: UnboundedReceiver<u8>))]
         async fn SlowStage1() -> i32 {
             println!("Running SlowStage1");
             tx.send(1).unwrap();
@@ -745,7 +744,7 @@ mod async_tests {
             42
         }
 
-        #[stage(lazy, state(tx: UnboundedSender<u8>, rx: UnboundedReceiver<u8>))]
+        #[stage(state(tx: UnboundedSender<u8>, rx: UnboundedReceiver<u8>))]
         async fn SlowStage2() -> String {
             println!("Running SlowStage2");
             assert_eq!(rx.recv().await.unwrap(), 1);

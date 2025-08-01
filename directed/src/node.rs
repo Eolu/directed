@@ -3,7 +3,7 @@ use std::{any::Any, collections::HashMap};
 
 use crate::{
     InjectionError, StageShape,
-    stage::{EvalStrategy, ReevaluationRule, Stage},
+    stage::{ReevaluationRule, Stage},
 };
 
 /// Every node wraps a Stage, which is a decorated function that has some
@@ -59,7 +59,6 @@ pub trait AnyNode: Any + Send + Sync + 'static {
     fn eval(&mut self) -> Result<Box<dyn DynFields>, InjectionError>;
     #[cfg(feature = "tokio")]
     async fn eval_async(&mut self) -> Result<Box<dyn DynFields + Send + Sync>, InjectionError>;
-    fn eval_strategy(&self) -> EvalStrategy;
     fn reeval_rule(&self) -> ReevaluationRule;
     /// This a a core part of the plumbing of this crate - take the outputs of
     /// a parent node and use them to set the inputs of a child node.
@@ -97,10 +96,6 @@ impl<S: Stage + Send + Sync + 'static> AnyNode for Node<S> {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self as &mut dyn Any
-    }
-
-    fn eval_strategy(&self) -> EvalStrategy {
-        self.stage.eval_strategy()
     }
 
     fn reeval_rule(&self) -> ReevaluationRule {

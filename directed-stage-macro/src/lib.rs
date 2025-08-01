@@ -571,13 +571,7 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
     let output_handling =
         generate_output_handling(&config, &output_struct_name, config.cache_strategy)?;
 
-    // Determine evaluation strategy and reevaluation rule
-    let eval_strategy = if config.is_lazy.0 {
-        quote_spanned! {config.is_lazy.1=> directed::EvalStrategy::Lazy }
-    } else {
-        quote_spanned! {config.is_lazy.1=> directed::EvalStrategy::Urgent }
-    };
-
+    // Determine caching rules
     let reevaluation_rule = match &config.cache_strategy {
         (CacheStrategy::None, span) => quote_spanned! {*span=> directed::ReevaluationRule::Move },
         (CacheStrategy::Last, span) => {
@@ -705,10 +699,6 @@ fn generate_stage_impl(mut config: StageConfig) -> Result<proc_macro2::TokenStre
             type State = #state_struct_name;
 
             #evaluate_impls
-
-            fn eval_strategy(&self) -> directed::EvalStrategy {
-                #eval_strategy
-            }
 
             fn reeval_rule(&self) -> directed::ReevaluationRule {
                 #reevaluation_rule

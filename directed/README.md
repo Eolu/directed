@@ -9,7 +9,7 @@ This crate is a Directed-Acyclic-Graph (DAG)-based evaluation system for Rust. I
 
 ## Current project status
 
-- 0.2 was a significant rewrite, and this should now be much more stable (although there is still a decent amount that needs to be updated and changed).
+- 0.3 Improves graph syntax and adds some additional features. There are still too many Send+Sync bounds in synchronous mode, and async mode has some kinks to work out. Things are still relatively unstable.
 
 ## Core API Concepts
 
@@ -45,15 +45,7 @@ fn MultiOutputStage() -> _ {
 ```
 
 #### Lazy
-Stages can be annotated as `lazy`. This will indicate that its node will never be evaluated until a child node needs its output to evaluate. Typical graphs will have multiple lazy nodes, and one or possibly a few non-lazy nodes. A graph with only lazy nodes will do nothing at all:
-```rust
-use directed::*;
-
-#[stage(lazy)]
-fn LazyStage() -> String {
-    String::from("Hello dependant node!")
-}
-```
+TODO: Create docs explaining evaluation of specific nodes
 
 #### Cache Last
 Stages can be annotated as `cache_last`. This will indicate that if reevaluated with identical inputs to the previous evaluation, it will just return cached outputs without rerunning the function:
@@ -121,6 +113,8 @@ fn main() {
     let mut registry = Registry::new();
     // This returns a NodeId, which can be used to lookup the node in the registry.
     let node_1 = registry.register(SimpleStage);
+    // We can also create simple nodes for when an input is relatively constant.
+    let simple_node = registry.value::<u32>(100);
 }
 ```
 
@@ -150,13 +144,13 @@ Putting it all together, the `Graph` struct stores node IDs and the connections 
 ```rust
 use directed::*;
 
-#[stage(lazy, cache_last)]
+#[stage(cache_last)]
 fn TinyStage1() -> String {
     println!("Running stage 1");
     String::from("This is the output!")
 }
 
-#[stage(lazy)]
+#[stage]
 fn TinyStage2(input: String, input2: String) -> String {
     println!("Running stage 2");
     input.to_uppercase() + " [" + &input2.chars().count().to_string() + " chars in 2nd string]"
@@ -192,7 +186,7 @@ fn main() {
     .unwrap();
 
     // This will do the following:
-    // - Find the first non-lazy node (node_3).
+    // - Start evaluation of the specified node (node_3).
     // - Recursively evaluate it's parents (so node_3 will request node_2, which will request node_1 twice)
     // - node_1 will evaluate, printing "Running stage 1", and pass a clone of its output to "input" on node_2.
     // - node_1 will not evaluate again, and just pass a clone of its output to "input2" on node_2.
@@ -207,40 +201,6 @@ fn main() {
 
 As stated before, multiple graphs can be created from that same registry, executed in any order.
 
-###### TODO: Update all the below sections of the README for 0.2 ####################################
-
-#### Access node inputs, outputs, and state
-
-```rust
-use directed::*;
-
-#[stage(out(string_out: String), state(example_state: u8))]
-fn TinyStage1() -> _ {
-    output!{
-        string_out: String::from("This is the output!")
-    }
-}
-
-let mut registry = Registry::new();
-let node_1 = registry.register_with_state(TinyStage1, state!(TinyStage1 {example_state: 10}));
-let graph = graph! {
-    nodes: (node_1),
-    connections: {}
-}
-.unwrap();
-
-graph.execute(&mut registry, node_1).unwrap();
-
-let outputs = registry.get_outputs(node_1);
-
-assert_eq!(
-    outputs.unwrap().string_out,
-    Some(String::from("This is the output!"))
-)
-```
-
-This can also be used to insert inputs into unconnected nodes of graphs, allowing interaction between the graph-based workflow and other arbitrary sources of data.
-
 ## Features
 
 ### tokio
@@ -254,8 +214,9 @@ Stages marked `async` will behave as expected - executing within the async conte
 
 TODO: Add pallatable example. For now, [Take a look at this test for an example](https://github.com/Eolu/directed/blob/ca34d23a32703162a011f39e578bc4e5e5dda0c8/directed/src/lib.rs#L677).
 
-## WIP features/ideas/TODOs
+## WIP features/ideas/TODOs/notes
 
+- More comprehensive docs, less wordy README
 - Node checkout in async contexts needs more thought and guardrails.
 - Automatic validators to make sure correct input and output types are present if required, especially at runtime as an available API.
 - There is likely some more nuance to exactly where Send+Sync bounds belong

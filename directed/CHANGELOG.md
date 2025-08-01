@@ -1,6 +1,7 @@
 # 0.3.0
 - New, more clear graph syntax
 - Can now turn values directly into simple node inputs in the graph
+- Can now directly specify the node to execute - so removed the concept of lazy nodes (all nodes are lazy unless specified)
 
 # 0.2.7
 - Got async working
