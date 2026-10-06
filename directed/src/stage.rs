@@ -1,84 +1,92 @@
-use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
-    sync::Arc,
-};
+//! The `Stage` trait, its object-safe erased form, and the caching / evaluation
+//! policy enums.
 
-use crate::{
-    node::{AnyNode, Node},
-    types::{DataLabel, NodeOutput}, InjectionError,
-};
+use std::future::Future;
+use std::pin::Pin;
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash)]
-pub enum RefType {
-    Owned,
-    Borrowed,
-    BorrowedMut,
-}
+use crate::error::CallError;
+use crate::io::Io;
+use crate::registry::NodeId;
+use crate::signature::Signature;
 
-/// Defines all the information about how a stage is handled.
-pub trait Stage: Clone {
-    /// Internal state only, no special rules apply to this
-    type State;
-    /// The base function for this stage
-    type BaseFn;
-
-    /// Used for typechecking inputs.
-    fn inputs(&self) -> &HashMap<DataLabel, (TypeId, RefType)>;
-    /// Used for typechecking outputs
-    fn outputs(&self) -> &HashMap<DataLabel, TypeId>;
-    /// Evaluate the stage with the given input and state
-    fn evaluate(
-        &self,
-        state: &mut Self::State,
-        inputs: &mut HashMap<DataLabel, (Arc<dyn Any + Send + Sync>, ReevaluationRule)>,
-    ) -> Result<NodeOutput, InjectionError>;
-
-    fn eval_strategy(&self) -> EvalStrategy {
-        EvalStrategy::Lazy
-    }
-
-    fn reeval_rule(&self) -> ReevaluationRule {
-        ReevaluationRule::Move
-    }
-
-    /// Stage-level connection processing logic. See [Node::flow_data] for more
-    /// information.  
-    fn inject_input(
-        &self,
-        node: &mut Node<Self>,
-        parent: &mut Box<dyn AnyNode>,
-        output: DataLabel,
-        input: DataLabel,
-    ) -> Result<(), InjectionError>;
-
-    /// Stage name, used for debugging information
-    fn name(&self) -> &str;
-
-    /// Pointer to the function this wraps
-    fn get_fn() -> Self::BaseFn;
-}
-
+/// When a node is evaluated relative to a graph execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalStrategy {
-    /// Only evaluate when necessary to evaluate an "Urgent" stage.
+    /// Only evaluate when an urgent descendant needs it.
     Lazy,
-    /// Evaluate as soon as possible. There must be at least 1 "Urgent" stage
-    /// for anything to execute at all.
+    /// Evaluate as soon as possible. A graph with no urgent nodes does nothing.
     Urgent,
 }
 
+/// How a node reuses previous results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReevaluationRule {
-    /// Always move outputs, reevaluate every time. If the receiving node takes
-    /// a reference, it will be pased in, then dropped after that node
-    /// evaluates.
-    Move,
-    /// If all inputs are previous inputs, don't evaluate and just return a
-    /// clone of the cached output.
-    CacheLast,
-    /// If all inputs are equal to ANY previous input combination, don't
-    /// evaluate and just return a clone of the cached output associated with
-    /// that exact set of inputs.
-    CacheAll,
+pub enum CachePolicy {
+    /// Opaque: consume inputs and re-evaluate every time.
+    None,
+    /// Transparent: reuse the previous outputs when the inputs are unchanged.
+    Last,
+    /// Memoize every distinct combination of inputs.
+    All,
+}
+
+/// A statically-typed node handle (the `T` in [`Stage::Handle`]).
+pub trait StageHandle: Copy {
+    fn id(&self) -> NodeId;
+}
+
+pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// A wrapped function. This trait is *not* object-safe on purpose: erasure
+/// happens exactly once, through [`Erased`].
+pub trait Stage: Send + Sync + Sized + 'static {
+    /// Arbitrary per-node state, mutated across evaluations.
+    type State: Send + 'static;
+    /// A generated, statically-typed handle to a registered node.
+    type Handle: StageHandle + 'static;
+
+    const EVAL: EvalStrategy = EvalStrategy::Urgent;
+    const CACHE: CachePolicy = CachePolicy::None;
+
+    /// The static port description, used for validation and diagnostics.
+    fn signature() -> &'static Signature;
+
+    /// Build a typed handle for a registered node id.
+    fn handle(id: NodeId) -> Self::Handle;
+
+    /// The single method the `#[stage]` macro implements.
+    fn call<'a>(
+        state: &'a mut Self::State,
+        io: &'a mut Io,
+    ) -> impl Future<Output = Result<(), CallError>> + Send + 'a;
+}
+
+/// The object-safe view the engine actually sees.
+pub(crate) trait DynStage: Send {
+    fn signature(&self) -> &'static Signature;
+    fn eval_strategy(&self) -> EvalStrategy;
+    fn cache_policy(&self) -> CachePolicy;
+    fn run<'a>(&'a mut self, io: &'a mut Io) -> BoxFuture<'a, Result<(), CallError>>;
+}
+
+/// Adapter that erases a [`Stage`] plus its state into a [`DynStage`].
+pub(crate) struct Erased<S: Stage> {
+    pub(crate) state: S::State,
+}
+
+impl<S: Stage> DynStage for Erased<S> {
+    fn signature(&self) -> &'static Signature {
+        S::signature()
+    }
+
+    fn eval_strategy(&self) -> EvalStrategy {
+        S::EVAL
+    }
+
+    fn cache_policy(&self) -> CachePolicy {
+        S::CACHE
+    }
+
+    fn run<'a>(&'a mut self, io: &'a mut Io) -> BoxFuture<'a, Result<(), CallError>> {
+        Box::pin(S::call(&mut self.state, io))
+    }
 }

@@ -1,115 +1,129 @@
-//! The registry is the "global" store of logic and state.
+//! The registry owns node state. It is deliberately separate from [`Graph`],
+//! which only stores connectivity; any number of graphs can share one registry.
+
+use std::sync::Mutex;
+
+use crate::stage::{DynStage, Erased, Stage};
+use crate::value::Value;
 use slab::Slab;
-use std::any::TypeId;
 
-use crate::{
-    node::{AnyNode, Node}, stage::Stage, NodeTypeMismatchError, NodesNotFoundError, RegistryError
-};
+/// A stable identifier for a registered node.
+pub type NodeId = usize;
 
-/// A [Registry] stores each node, its state, and the logical [Stage]
-/// associated with it.
-pub struct Registry(pub(super) Slab<Box<dyn AnyNode>>);
+/// A node's input values captured for cache comparison.
+pub(crate) type InputSnapshot = Vec<Option<Value>>;
+
+/// Cached inputs and outputs for one distinct input combination.
+pub(crate) type CacheEntry = (InputSnapshot, Vec<Option<Value>>);
+
+/// Cached inputs/outputs for a node, mirroring a [`crate::CachePolicy`].
+pub(crate) enum CacheState {
+    None,
+    Last { inputs: InputSnapshot },
+    All { entries: Vec<CacheEntry> },
+}
+
+/// A registered node: its stage (type-erased), its current outputs and cache.
+///
+/// Each node lives behind its own [`Mutex`] so independent nodes can be
+/// evaluated concurrently. The stage is briefly taken out during evaluation so
+/// the lock is never held across an `await`.
+pub(crate) struct NodeCell {
+    pub(crate) stage: Option<Box<dyn DynStage>>,
+    pub(crate) outputs: Vec<Option<Value>>,
+    pub(crate) cache: CacheState,
+    pub(crate) has_run: bool,
+}
+
+impl NodeCell {
+    fn new(stage: Box<dyn DynStage>) -> Self {
+        let outputs = vec![None; stage.signature().outputs.len()];
+        let cache = match stage.cache_policy() {
+            crate::CachePolicy::None => CacheState::None,
+            crate::CachePolicy::Last => CacheState::Last { inputs: Vec::new() },
+            crate::CachePolicy::All => CacheState::All {
+                entries: Vec::new(),
+            },
+        };
+        Self {
+            stage: Some(stage),
+            outputs,
+            cache,
+            has_run: false,
+        }
+    }
+
+    pub(crate) fn signature(&self) -> &'static crate::Signature {
+        self.stage
+            .as_ref()
+            .expect("stage is only absent mid-evaluation")
+            .signature()
+    }
+
+    pub(crate) fn cache_policy(&self) -> crate::CachePolicy {
+        self.stage
+            .as_ref()
+            .expect("stage is only absent mid-evaluation")
+            .cache_policy()
+    }
+
+    pub(crate) fn eval_strategy(&self) -> crate::EvalStrategy {
+        self.stage
+            .as_ref()
+            .expect("stage is only absent mid-evaluation")
+            .eval_strategy()
+    }
+}
+
+/// Stores nodes and their state.
+pub struct Registry {
+    nodes: Slab<Mutex<NodeCell>>,
+}
 
 impl Registry {
     pub fn new() -> Self {
-        Self(Slab::new())
+        Self { nodes: Slab::new() }
     }
 
-    /// Get a reference to the state of a specific node.
-    pub fn state<S: Stage + 'static>(&self, id: usize) -> Result<&S::State, RegistryError> {
-        self.validate_node_type::<S>(id)?;
-        match self.0.get(id) {
-            Some(any_node) => match any_node.as_any().downcast_ref::<Node<S>>() {
-                Some(node) => Ok(&node.state),
-                None => unreachable!(),
-            },
-            None => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
-        }
+    /// Register a node using the default state of its stage.
+    pub fn register<S: Stage>(&mut self) -> S::Handle
+    where
+        S::State: Default,
+    {
+        self.register_with_state::<S>(S::State::default())
     }
 
-    /// Get a mutable reference to the state of a specific node.
-    pub fn state_mut<S: Stage + 'static>(&mut self, id: usize) -> Result<&mut S::State, RegistryError> {
-        self.validate_node_type::<S>(id)?;
-        match self.0.get_mut(id) {
-            Some(any_node) => match any_node.as_any_mut().downcast_mut::<Node<S>>() {
-                Some(node) => Ok(&mut node.state),
-                None => unreachable!(),
-            },
-            None => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
-        }
+    /// Register a node with explicit initial state.
+    pub fn register_with_state<S: Stage>(&mut self, state: S::State) -> S::Handle {
+        let id = self
+            .nodes
+            .insert(Mutex::new(NodeCell::new(Box::new(Erased::<S> { state }))));
+        S::handle(id)
     }
 
-    /// Add a node to the registry. This returns a unique identifier for that
-    /// node, which can be used to add it to a [crate::Graph]. This uses default
-    /// state
-    pub fn register<S: Stage + 'static>(&mut self, stage: S) -> usize
-    where S::State: Default {
-        self.0.insert(Box::new(Node::new(stage, S::State::default())))
+    /// Remove a node and drop its state.
+    pub fn unregister(&mut self, id: NodeId) -> bool {
+        self.nodes.try_remove(id).is_some()
     }
 
-    /// Add a node to the registry. This returns a unique identifier for that
-    /// node, which can be used to add it to a [crate::Graph]
-    pub fn register_with_state<S: Stage + 'static>(&mut self, stage: S, state: S::State) -> usize {
-        self.0.insert(Box::new(Node::new(stage, state)))
+    /// Number of registered nodes.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
     }
 
-    /// Returns an error if the registry doesn't contain a node with a stage
-    /// of the specified type with the given id.
-    pub fn validate_node_type<S: Stage + 'static>(&self, id: usize) -> Result<(), RegistryError> {
-        match self.0.get(id) {
-            Some(node) => match node.as_any().downcast_ref::<Node<S>>() {
-                Some(_) => Ok(()),
-                None => Err(NodeTypeMismatchError{got: TypeId::of::<Node<S>>(), expected: node.as_any().type_id()}.into()),
-            },
-            None => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
-        }
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
     }
 
-    /// Remove a node from the registry and return it. This will return an error if
-    /// S doesn't match the stage type for that node.
-    pub fn unregister<S: Stage + 'static>(&mut self, id: usize) -> Result<Option<Node<S>>, RegistryError> {
-        self.validate_node_type::<S>(id)?;
-        match self.0.try_remove(id) {
-            Some(node) => match node.into_any().downcast() {
-                Ok(node) => Ok(Some(*node)),
-                Err(node) => Err(NodeTypeMismatchError{got: TypeId::of::<Node<S>>(), expected: node.type_id()}.into()),
-            },
-            None => Ok(None),
-        }
+    pub(crate) fn lock(&self, id: NodeId) -> Option<std::sync::MutexGuard<'_, NodeCell>> {
+        self.nodes
+            .get(id)
+            .map(|cell| cell.lock().expect("node mutex poisoned"))
     }
+}
 
-    /// Remove a node from the registry and drop it.
-    pub fn unregister_and_drop(&mut self, id: usize) -> Result<(), RegistryError> {
-        match self.0.try_remove(id).map(drop) {
-            Some(_) => Ok(()),
-            None => Err(NodesNotFoundError::from(&[id] as &[usize]).into()),
-        }
-    }
-
-    /// Get a type-erased node
-    pub fn get(&self, id: usize) -> Option<&Box<dyn AnyNode>> {
-        self.0.get(id)
-    }
-
-    /// Get a mutable type-erased node
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut Box<dyn AnyNode>> {
-        self.0.get_mut(id)
-    }
-
-    /// Get 2 mutable type-erased nodes
-    ///
-    /// This is an important internal detail: a parent a child node often need
-    /// to be modified together.
-    /// 
-    /// This function will panic if id0 and id1 are the same.
-    pub fn get2_mut(
-        &mut self,
-        id0: usize,
-        id1: usize,
-    ) -> Result<(&mut Box<dyn AnyNode>, &mut Box<dyn AnyNode>), NodesNotFoundError> {
-        match self.0.get2_mut(id0, id1) {
-            Some((node0, node1)) => Ok((node0, node1)),
-            None => Err(NodesNotFoundError::from(&[id0, id1] as &[usize])),
-        }
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
     }
 }

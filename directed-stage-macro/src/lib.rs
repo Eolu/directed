@@ -1,80 +1,72 @@
+//! The `#[stage]` attribute macro. It parses a wrapped function and emits a
+//! marker type, a typed handle, and a small `Stage` impl. All caching, move,
+//! and injection logic lives in the `directed` runtime, not here.
+
 use proc_macro::TokenStream;
-use proc_macro_error::proc_macro_error;
-use quote::quote;
+use proc_macro2::{Span, TokenStream as TokenStream2};
+use quote::{format_ident, quote};
 use syn::{
-    FnArg, ItemFn, Pat, ReturnType, Token, Type,
+    FnArg, Ident, ItemFn, Pat, ReturnType, Token, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
 };
 
-/// A macro that wraps a function with the standardized interface:
-/// fn fn_name(&mut DataMap, &DataMap) -> Result<DataMap>
+/// Wrap a function as a graph stage.
 ///
-/// Example usage:
-///
-/// ```
-/// #[stage(lazy, transparent)]
-/// fn add_numbers(a: i32, b: i32) -> i32 {
-///     a + b
-/// }
-/// ```
-///
-/// Multiple outputs are also supported with this syntax:
-/// #[stage(out(arg1_name: String, arg2_name: Vec<u8>))]
-/// fn output_things() -> directed::NodeOutput {
-///    let some_string = String::from("Hello Graph!");
-///    let some_vec = vec![1, 2, 3, 4, 5];
-///
-///    // This builds an output type
-///    directed::output!{
-///        arg1_name: some_string,
-///        arg2_name: some_vec
-///    }
-/// }
+/// Flags: `lazy`, `cache_last`, `cache_all`, `state(Type)`, and
+/// `out(name: Type, ...)` for multiple outputs (the function then returns a
+/// tuple in the same order).
 #[proc_macro_attribute]
-#[proc_macro_error]
 pub fn stage(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
-    let meta_args = parse_macro_input!(attr as StageArgs);
-    generate_stage_impl(StageConfig::from_args(&input_fn, &meta_args).unwrap()).into()
+    let args = parse_macro_input!(attr as StageArgs);
+    match StageConfig::from_args(&input_fn, &args).map(expand) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }
 
-// Configuration structs
-struct StageConfig {
-    original_fn: ItemFn,
-    stage_name: syn::Ident,
-    is_lazy: bool,
-    cache_strategy: CacheStrategy,
-    outputs: Vec<(String, Type)>,
-    inputs: Vec<InputParam>,
-    state_type: proc_macro2::TokenStream
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CacheStrategy {
+    None,
+    Last,
+    All,
 }
 
-enum RefType {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RefKind {
     Owned,
     Borrowed,
     BorrowedMut,
 }
 
-impl RefType {
-    fn quoted(&self) -> proc_macro2::TokenStream {
-        match self {
-            RefType::Owned => quote! { directed::RefType::Owned },
-            RefType::Borrowed => quote! { directed::RefType::Borrowed },
-            RefType::BorrowedMut => quote! { directed::RefType::BorrowedMut },
-        }
-    }
-}
-
 struct InputParam {
-    name: syn::Ident,
-    type_: Type,
-    ref_type: RefType,
-    clean_name: String,
+    ident: Ident,
+    clean: String,
+    true_ty: Type,
+    ref_kind: RefKind,
+    is_mut: bool,
 }
 
-#[derive(Clone)]
+struct OutputParam {
+    name: Ident,
+    ty: Type,
+}
+
+struct StageConfig {
+    original_fn: ItemFn,
+    stage_name: Ident,
+    handle_name: Ident,
+    is_lazy: bool,
+    cache: CacheStrategy,
+    inputs: Vec<InputParam>,
+    outputs: Vec<OutputParam>,
+    state_type: TokenStream2,
+}
+
+// --- attribute parsing ------------------------------------------------------
+
 struct Outputs(Punctuated<Output, Token![,]>);
 
 impl Parse for Outputs {
@@ -83,48 +75,40 @@ impl Parse for Outputs {
     }
 }
 
-#[derive(Clone)]
 struct Output {
-    name: syn::Ident,
+    name: Ident,
     ty: Type,
 }
 
 impl Parse for Output {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let name = input.parse()?;
-        let _colon_token: Token![:] = input.parse()?;
+        let _: Token![:] = input.parse()?;
         let ty = input.parse()?;
         Ok(Output { name, ty })
     }
 }
 
 enum StageArg {
-    Flag(syn::Ident),
-    Output(Outputs),
-    State(syn::Type)
+    Flag(Ident),
+    Outputs(Outputs),
+    State(Type),
 }
 
 impl Parse for StageArg {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let lookahead = input.lookahead1();
-
-        if lookahead.peek(syn::Ident) {
-            let ident: syn::Ident = input.parse()?;
-
-            if ident == "out" {
-                let content;
-                let _paren_token = syn::parenthesized!(content in input);
-                return Ok(StageArg::Output(content.parse()?));
-            } else if ident == "state" {
-                let content;
-                let _paren_token = syn::parenthesized!(content in input);
-                return Ok(StageArg::State(content.parse()?));
-            } else {
-                return Ok(StageArg::Flag(ident));
-            }
+        let ident: Ident = input.parse()?;
+        if ident == "out" {
+            let content;
+            syn::parenthesized!(content in input);
+            return Ok(StageArg::Outputs(content.parse()?));
         }
-
-        Err(lookahead.error())
+        if ident == "state" {
+            let content;
+            syn::parenthesized!(content in input);
+            return Ok(StageArg::State(content.parse()?));
+        }
+        Ok(StageArg::Flag(ident))
     }
 }
 
@@ -140,531 +124,322 @@ impl Parse for StageArgs {
     }
 }
 
-#[derive(PartialEq)]
-enum CacheStrategy {
-    None,
-    Last,
-    All,
-}
+// --- configuration ----------------------------------------------------------
 
 impl StageConfig {
-    fn from_args(input_fn: &ItemFn, meta_args: &StageArgs) -> syn::Result<Self> {
+    fn from_args(input_fn: &ItemFn, args: &StageArgs) -> syn::Result<Self> {
         let stage_name = input_fn.sig.ident.clone();
+        let handle_name = format_ident!("{}Handle", stage_name);
 
         let mut is_lazy = false;
-        let mut cache_strategy = CacheStrategy::None;
-        let mut outputs = Vec::new();
+        let mut cache = CacheStrategy::None;
+        let mut explicit_outputs = Vec::new();
         let mut state_type = quote!(());
 
-        // Process stage attribute arguments
-        for arg in meta_args.args.iter() {
+        for arg in &args.args {
             match arg {
                 StageArg::Flag(ident) => match ident.to_string().as_str() {
                     "lazy" => is_lazy = true,
-                    "cache_last" => cache_strategy = CacheStrategy::Last,
-                    "cache_all" => cache_strategy = CacheStrategy::All,
-                    unknown => {
+                    "cache_last" => cache = CacheStrategy::Last,
+                    "cache_all" => cache = CacheStrategy::All,
+                    other => {
                         return Err(syn::Error::new(
                             ident.span(),
-                            format!("Unrecognized attribute: {}", unknown),
+                            format!("unrecognized stage attribute `{other}`"),
                         ));
                     }
                 },
-                StageArg::Output(output_defs) => {
-                    for output in &output_defs.0 {
-                        outputs.push((output.name.to_string(), output.ty.clone()));
+                StageArg::Outputs(outputs) => {
+                    for output in &outputs.0 {
+                        explicit_outputs.push(OutputParam {
+                            name: output.name.clone(),
+                            ty: output.ty.clone(),
+                        });
                     }
-                },
-                StageArg::State(ty) => {
-                    state_type = quote!(#ty);
                 }
+                StageArg::State(ty) => state_type = quote!(#ty),
             }
         }
 
-        // Process function arguments to create input definitions
-        let inputs = Self::extract_input_params(&input_fn.sig.inputs)?;
+        let inputs = Self::extract_inputs(&input_fn.sig.inputs)?;
 
-        // If no outputs specified, process return type
-        if outputs.is_empty() {
-            outputs = Self::extract_outputs_from_return_type(&input_fn.sig.output)?;
-        }
+        let outputs = if explicit_outputs.is_empty() {
+            vec![OutputParam {
+                name: format_ident!("out"),
+                ty: return_type(&input_fn.sig.output),
+            }]
+        } else {
+            explicit_outputs
+        };
 
         Ok(StageConfig {
             original_fn: input_fn.clone(),
             stage_name,
+            handle_name,
             is_lazy,
-            cache_strategy,
-            outputs,
+            cache,
             inputs,
-            state_type
+            outputs,
+            state_type,
         })
     }
 
-    fn extract_input_params(
-        inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
-    ) -> syn::Result<Vec<InputParam>> {
+    fn extract_inputs(inputs: &Punctuated<FnArg, Token![,]>) -> syn::Result<Vec<InputParam>> {
         let mut result = Vec::new();
+        for arg in inputs {
+            let FnArg::Typed(pat_type) = arg else {
+                return Err(syn::Error::new_spanned(arg, "`self` is not supported"));
+            };
+            let Pat::Ident(pat_ident) = &*pat_type.pat else {
+                return Err(syn::Error::new_spanned(
+                    &pat_type.pat,
+                    "only simple identifiers are supported as inputs",
+                ));
+            };
+            let ident = pat_ident.ident.clone();
+            let raw = ident.to_string();
+            let clean = raw.strip_prefix('_').unwrap_or(&raw).to_string();
+            let is_mut = pat_ident.mutability.is_some();
 
-        for arg in inputs.iter() {
-            if let FnArg::Typed(pat_type) = arg {
-                if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                    let arg_name = &pat_ident.ident;
-                    let arg_type = &pat_type.ty;
-                    let arg_name_str = arg_name.to_string();
-
-                    let is_unused = arg_name_str.starts_with('_');
-                    let clean_name = if is_unused {
-                        arg_name_str[1..].to_string()
+            let (ref_kind, true_ty) = match &*pat_type.ty {
+                Type::Reference(reference) => {
+                    let kind = if reference.mutability.is_some() {
+                        RefKind::BorrowedMut
                     } else {
-                        arg_name_str.clone()
+                        RefKind::Borrowed
                     };
-
-                    let ref_type = match &**arg_type {
-                        Type::Reference(type_reference) if type_reference.mutability.is_some() => {
-                            RefType::BorrowedMut
-                        }
-                        Type::Reference(_) => RefType::Borrowed,
-                        _ => RefType::Owned,
-                    };
-
-                    result.push(InputParam {
-                        name: arg_name.clone(),
-                        type_: *arg_type.clone(),
-                        ref_type,
-                        clean_name,
-                    });
+                    (kind, (*reference.elem).clone())
                 }
-            }
-        }
+                other => (RefKind::Owned, other.clone()),
+            };
 
+            result.push(InputParam {
+                ident,
+                clean,
+                true_ty,
+                ref_kind,
+                is_mut,
+            });
+        }
         Ok(result)
     }
+}
 
-    fn extract_outputs_from_return_type(
-        return_type: &ReturnType,
-    ) -> syn::Result<Vec<(String, Type)>> {
-        match return_type {
-            ReturnType::Type(_, ty) => {
-                // Check if the return type is NodeOutput
-                if let Type::Path(type_path) = &**ty {
-                    if let Some(segment) = type_path.path.segments.last() {
-                        // TODO: This is a hack, just properly check if any out attributes exist
-                        if segment.ident == "NodeOutput" {
-                            // NodeOutput will be handled elsewhere
-                            return Ok(Vec::new());
-                        }
-                    }
-                }
-
-                // Single output with default name
-                Ok(vec![("_".to_string(), (**ty).clone())])
-            }
-            ReturnType::Default => {
-                // Return type is (), use default name
-                Ok(vec![(
-                    "_".to_string(),
-                    Type::Tuple(syn::TypeTuple {
-                        paren_token: syn::token::Paren::default(),
-                        elems: Punctuated::new(),
-                    }),
-                )])
-            }
-        }
-    }
-
-    fn is_multi_output(&self) -> bool {
-        if let ReturnType::Type(_, ty) = &self.original_fn.sig.output {
-            if let Type::Path(type_path) = &**ty {
-                if let Some(segment) = type_path.path.segments.last() {
-                    // TODO: This is a hack, just check if any out attributes exist
-                    return segment.ident == "NodeOutput";
-                }
-            }
-        }
-        false
+fn return_type(output: &ReturnType) -> Type {
+    match output {
+        ReturnType::Type(_, ty) => (**ty).clone(),
+        ReturnType::Default => syn::parse_quote!(()),
     }
 }
 
-/// This associates the names of function parameters with the TypeId of their type.
-///
-/// Used to build and validate I/O-based connections
-fn generate_input_registrations(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    inputs.iter().map(|input| {
-        let arg_name = &input.clean_name;
-        let arg_type = &input.type_;
-        let ref_type = input.ref_type.quoted();
-        
-        quote! {
-            inputs.insert(directed::DataLabel::new_with_type_name(#arg_name, stringify!(#arg_type)), (std::any::TypeId::of::<#arg_type>(), #ref_type));
-        }
-    }).collect()
-}
+// --- code generation --------------------------------------------------------
 
-/// This associates the names of function outputs with the TypeId of their type.
-/// When a function returns a NodeOutput type, this will associate meaningful
-/// names to each output. When a function returns any other type, this will
-/// simply associate that one type with the name '_'.
-///
-/// Used to build and validate I/O-based connections
-fn generate_output_registrations(outputs: &[(String, Type)]) -> Vec<proc_macro2::TokenStream> {
-    outputs
-        .iter()
-        .map(|(name, ty)| {
-            quote! {
-                outputs.insert(directed::DataLabel::new_with_type_name(#name, stringify!(#ty)), std::any::TypeId::of::<#ty>());
-            }
-        })
-        .collect()
-}
-
-/// Get a type, squash the &
-fn true_type(ty: &syn::Type) -> &syn::Type {
-    if let syn::Type::Reference(ty) = ty {
-        &*ty.elem
-    } else {
-        ty
+fn input_ops_expr(cache: CacheStrategy, ty: &Type) -> TokenStream2 {
+    match cache {
+        CacheStrategy::None => quote!(directed::ValueOps::opaque::<#ty>()),
+        CacheStrategy::Last => quote!(directed::ValueOps::eq::<#ty>()),
+        CacheStrategy::All => quote!(directed::ValueOps::eq_hash::<#ty>()),
     }
 }
 
-/// This code is used by the wrapper function - it downcasts type-erased
-/// function parameters so that the user-facing function can be called with
-/// concrete types.
-fn generate_extraction_code_move(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    inputs.iter().map(|input| {
-        let arg_name = &input.name;
-        let arg_type = true_type(&input.type_);
-        let clean_arg_name = &input.clean_name;
-        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
-        
-        quote! {
-            // Non-transparent functions never clone, always move
-            let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.remove(&directed::DataLabel::new(#clean_arg_name)) {
-                let dc = std::sync::Arc::downcast::<#arg_type>(input);
-                match dc {
-                    Ok(val) => (val, reeval_rule),
-                    Err(e) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
-                }
-            } else {
-                return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
-            };
-        }
-    }).collect()
+fn output_ops_expr(ty: &Type) -> TokenStream2 {
+    // Outputs are only ever shared by `Arc` clone, so they need no
+    // comparison capabilities regardless of the node's cache policy.
+    quote!(directed::ValueOps::opaque::<#ty>())
 }
 
-fn generate_extraction_code_cache_last(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    inputs.iter().map(|input| {
-        let arg_name = &input.name;
-        let arg_type = true_type(&input.type_);
-        let clean_arg_name = &input.clean_name;
-        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_arg_name);
-        
-        quote! {
-            let (#arg_name, #reeval_name): (std::sync::Arc<#arg_type>, directed::ReevaluationRule) = if let Some((input, reeval_rule)) = inputs.get(&directed::DataLabel::new(#clean_arg_name)) {
-                match std::sync::Arc::downcast::<#arg_type>(input.clone()) {
-                    Ok(val) => (val, *reeval_rule),
-                    Err(_) => return Err(directed::InjectionError::InputTypeMismatchDetails{ name: #clean_arg_name, expected: stringify!(#arg_type)})
-                }
-            } else {
-                return Err(directed::InjectionError::InputNotFound(#clean_arg_name.into()));
-            };
-        }
-    }).collect()
-}
-
-/// This generates the code that uses the output of a parent node to set the
-/// input of a child node. This function is for moves only.
-fn inject_opaque_out(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    let mut code = inputs.iter().map(|input| {
-        let clean_arg_name = &input.clean_name;
-        let arg_type = &input.type_;
-        
-        quote! {
-            #clean_arg_name => {
-                let input_changed = node.input_changed();
-                let output_val = parent.outputs_mut()
-                    .remove(&output)
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
-                let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
-                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
-                node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::Move));
-                Ok(())
-            }
-        }
-    }).collect::<Vec<_>>();
-
-    // Add the default case
-    code.push(quote! {
-        name => Err(directed::InjectionError::InputNotFound(name.into()))
-    });
-
-    code
-}
-
-/// This generates the code that uses the output of a parent node to set the
-/// input of a child node. An equality comparison will be done between new
-/// output and the previous input, and a flag is raised if they don't match.
-fn inject_transparent_out_to_owned_in(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    let mut code = inputs.iter().map(|input| {
-        let clean_arg_name = &input.clean_name;
-        let arg_type = true_type(&input.type_);
-        
-        quote! {
-            #clean_arg_name => {
-                let input_changed = node.input_changed();
-                let output_val = parent.outputs_mut()
-                    .get(&output)
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?
-                    .clone(); // Clone the Arc
-                let output_val = std::sync::Arc::downcast::<#arg_type>(output_val)
-                    .map_err(|_| directed::InjectionError::OutputTypeMismatch(output.clone()))?;
-                
-                match node.inputs_mut().get(&input) {
-                    Some((input_val, _)) => {
-                        let input_val = input_val
-                            .downcast_ref::<#arg_type>()
-                            .ok_or_else(|| directed::InjectionError::InputTypeMismatch(input.clone()))?;
-                        if !input_changed && output_val.as_ref() != input_val {
-                            node.set_input_changed(true);
-                        }
-                    },
-                    None => {
-                        node.set_input_changed(true);
-                    }
-                }
-
-                node.inputs_mut().insert(input, (output_val, directed::ReevaluationRule::CacheLast));
-                Ok(())
-            }
-        }
-    }).collect::<Vec<_>>();
-
-    // Add the default case
-    code.push(quote! {
-        name => Err(directed::InjectionError::InputNotFound(name.into()))
-    });
-
-    code
-}
-
-fn inject_transparent_out_to_opaque_ref_in(inputs: &[InputParam]) -> Vec<proc_macro2::TokenStream> {
-    let mut code = inputs.iter().map(|input| {
-        let clean_arg_name = &input.clean_name;
-        let arg_type = true_type(&input.type_);
-        
-        quote! {
-            #clean_arg_name => {
-                let input_changed = node.input_changed();
-                let output_val_arc = parent.outputs_mut()
-                    .get(&output)
-                    .ok_or_else(|| directed::InjectionError::OutputNotFound(output.clone()))?;
-                let output_val_ref = std::sync::Arc::downcast::<#arg_type>(output_val_arc.clone())
-                    .map_err(|_| directed::InjectionError::InputTypeMismatch(input.clone()))?;
-                
-                match node.inputs_mut().get(&input) {
-                    Some((input_val, _)) => {
-                        let input_val = input_val
-                            .downcast_ref::<#arg_type>()
-                            .ok_or_else(|| directed::InjectionError::InputTypeMismatch(input.clone()))?;
-                        if !input_changed && input_val != &*output_val_ref {
-                            node.set_input_changed(true);
-                        }
-                    },
-                    None => {
-                        node.set_input_changed(true);
-                    }
-                }
-
-                node.inputs_mut().insert(input, (output_val_ref, directed::ReevaluationRule::CacheLast));
-                Ok(())
-            }
-        }
-    }).collect::<Vec<_>>();
-
-    // Add the default case
-    code.push(quote! {
-        name => Err(directed::InjectionError::InputNotFound(name.into()))
-    });
-
-    code
-}
-
-/// Functions that return a NodeOutput are used as-is, where as functions
-/// that return anything else are wrapped in a simple MultOutput (simple
-/// in that it contains only 1 output named '_')
-fn generate_output_handling(config: &StageConfig) -> proc_macro2::TokenStream {
-    let arg_names = config.inputs.iter().map(|input| &input.name);
-    if config.is_multi_output() {
-        quote! {
-            Ok(Self::get_fn()(state, #(#arg_names),*))
-        }
-    } else {
-        quote! {
-            Ok(directed::NodeOutput::new_simple(Self::get_fn()(state, #(#arg_names),*)))
-        }
+fn ref_kind_expr(kind: RefKind) -> TokenStream2 {
+    match kind {
+        RefKind::Owned => quote!(directed::RefKind::Owned),
+        RefKind::Borrowed => quote!(directed::RefKind::Borrowed),
+        RefKind::BorrowedMut => quote!(directed::RefKind::BorrowedMut),
     }
 }
 
-fn prepare_input_types(config: &StageConfig) -> Vec<proc_macro2::TokenStream> {
-    let args = config
-        .inputs
-        .iter()
-        .map(|input| (&input.name, &input.clean_name, &input.ref_type));
-    let mut output = Vec::new();
-    for (arg_name, clean_name, ref_type) in args {
-        let reeval_name = quote::format_ident!("{}_reevaluation_rule", clean_name);
-        match ref_type {
-            RefType::Owned => {
-                output.push(quote!{
-                    let #arg_name = match #reeval_name {
-                        directed::ReevaluationRule::Move => {
-                            // Parent is opaque, use Arc::into_inner
-                            match std::sync::Arc::into_inner(#arg_name) {
-                                Some(arg) => arg,
-                                None => {return Err(directed::InjectionError::TooManyReferences(stringify!(#arg_name)))}
-                            }
-                        },
-                        directed::ReevaluationRule::CacheLast => {
-                            // Parent is transparent, clone the value
-                            (*#arg_name).clone()
-                        },
-                        directed::ReevaluationRule::CacheAll => panic!("CacheAll is not yet implemented"),
-                    };
-                });
-            }
-            RefType::Borrowed => {
-                output.push(quote! {
-                    // TODO: if node is transparent (config.cache_strategy != None), error with a graceful message (rather than letting clone fail)
-                    let #arg_name = #arg_name.as_ref();
-                });
-            }
-            RefType::BorrowedMut => panic!("Mutable refs are not yet supported"),
-        }
-    }
-    output
-}
+fn expand(config: StageConfig) -> TokenStream2 {
+    let StageConfig {
+        original_fn,
+        stage_name,
+        handle_name,
+        is_lazy,
+        cache,
+        inputs,
+        outputs,
+        state_type,
+    } = config;
 
-/// The core trait that defines a stage - the culimnation of this macro
-fn generate_stage_impl(config: StageConfig) -> proc_macro2::TokenStream {
-    let original_fn = &config.original_fn;
-    let stage_name = &config.stage_name;
-    let state_type = &config.state_type;
-    let fn_attrs = &original_fn.attrs;
-    let fn_vis = &original_fn.vis;
+    let vis = &original_fn.vis;
+    let attrs = &original_fn.attrs;
     let original_args = &original_fn.sig.inputs;
-    let fn_return_type = &original_fn.sig.output;
-    let original_body = &original_fn.block;
+    let ret_ty = &original_fn.sig.output;
+    let body = &original_fn.block;
+    let asyncness = &original_fn.sig.asyncness;
+    let is_async = asyncness.is_some();
+    let maybe_await = if is_async { quote!(.await) } else { quote!() };
 
-    // Generate code sections
-    let input_registrations = generate_input_registrations(&config.inputs);
-    let output_registrations = generate_output_registrations(&config.outputs);
-    let extraction_code = match config.cache_strategy {
-        CacheStrategy::None => generate_extraction_code_move(&config.inputs),
-        CacheStrategy::Last => generate_extraction_code_cache_last(&config.inputs),
-        CacheStrategy::All => todo!(), // TODO: Handle CacheAll extraction
-    };
-    let inject_opaque_out_code = inject_opaque_out(&config.inputs);
-    let inject_transparent_out_to_owned_in_code =
-        inject_transparent_out_to_owned_in(&config.inputs);
-    let inject_transparent_out_to_opaque_ref_in_code =
-        inject_transparent_out_to_opaque_ref_in(&config.inputs);
-    let prepare_input_types_code = prepare_input_types(&config);
-    let output_handling = generate_output_handling(&config);
-
-    // Determine evaluation strategy and reevaluation rule
-    let eval_strategy = if config.is_lazy {
-        quote! { directed::EvalStrategy::Lazy }
+    let eval = if is_lazy {
+        quote!(directed::EvalStrategy::Lazy)
     } else {
-        quote! { directed::EvalStrategy::Urgent }
+        quote!(directed::EvalStrategy::Urgent)
+    };
+    let cache_tokens = match cache {
+        CacheStrategy::None => quote!(directed::CachePolicy::None),
+        CacheStrategy::Last => quote!(directed::CachePolicy::Last),
+        CacheStrategy::All => quote!(directed::CachePolicy::All),
     };
 
-    let reevaluation_rule = match config.cache_strategy {
-        CacheStrategy::None => quote! { directed::ReevaluationRule::Move },
-        CacheStrategy::Last => quote! { directed::ReevaluationRule::CacheLast },
-        CacheStrategy::All => todo!(), //quote! { directed::ReevaluationRule::CacheAll },
+    // Signature ports.
+    let input_ports = inputs.iter().map(|input| {
+        let name = syn::LitStr::new(&input.clean, Span::call_site());
+        let kind = ref_kind_expr(input.ref_kind);
+        let ty = &input.true_ty;
+        let ops = input_ops_expr(cache, ty);
+        quote! {
+            directed::InputPort { name: #name, ref_kind: #kind, ops: #ops }
+        }
+    });
+    let output_ports = outputs.iter().map(|output| {
+        let name = syn::LitStr::new(&output.name.to_string(), Span::call_site());
+        let ty = &output.ty;
+        let ops = output_ops_expr(ty);
+        quote! {
+            directed::OutputPort { name: #name, ops: #ops }
+        }
+    });
+
+    // Typed handle accessor methods.
+    let input_methods = inputs.iter().enumerate().map(|(index, input)| {
+        let method = format_ident!("{}", input.clean);
+        let ty = &input.true_ty;
+        let index_u16 = index as u16;
+        quote! {
+            pub fn #method(&self) -> directed::PortIn<#ty> {
+                directed::PortIn::new(
+                    self.id,
+                    #index_u16,
+                    &<#stage_name as directed::Stage>::signature().inputs[#index],
+                )
+            }
+        }
+    });
+    let output_methods = outputs.iter().enumerate().map(|(index, output)| {
+        let method = &output.name;
+        let ty = &output.ty;
+        let index_u16 = index as u16;
+        quote! {
+            pub fn #method(&self) -> directed::PortOut<#ty> {
+                directed::PortOut::new(
+                    self.id,
+                    #index_u16,
+                    &<#stage_name as directed::Stage>::signature().outputs[#index],
+                )
+            }
+        }
+    });
+
+    // Input extraction from the `Io` buffer.
+    let extraction = inputs.iter().enumerate().map(|(index, input)| {
+        let ident = &input.ident;
+        let true_ty = &input.true_ty;
+        let mutability = if input.is_mut { quote!(mut) } else { quote!() };
+        match input.ref_kind {
+            RefKind::Borrowed => quote! {
+                let #mutability #ident = io.get::<#true_ty>(#index)?;
+            },
+            RefKind::Owned => quote! {
+                let #mutability #ident = io.take_cloned::<#true_ty>(#index)?;
+            },
+            // A `&mut` input is copied into the node and mutated locally.
+            RefKind::BorrowedMut => {
+                let owned = format_ident!("__{}_owned", ident);
+                quote! {
+                    let mut #owned = io.take_cloned::<#true_ty>(#index)?;
+                    let #ident = &mut #owned;
+                }
+            }
+        }
+    });
+    let arg_idents = inputs.iter().map(|input| &input.ident);
+
+    // Output handling.
+    let output_handling = if outputs.len() == 1 {
+        quote! { io.set(0usize, __result); }
+    } else {
+        let binders: Vec<Ident> = (0..outputs.len())
+            .map(|index| format_ident!("__out{}", index))
+            .collect();
+        let sets = binders
+            .iter()
+            .enumerate()
+            .map(|(index, binder)| quote! { io.set(#index, #binder); });
+        quote! {
+            let (#(#binders),*) = __result;
+            #(#sets)*
+        }
     };
 
-    // The coup de grace
+    let body_fn = quote! {
+        #[allow(non_snake_case, clippy::too_many_arguments)]
+        #asyncness fn __body(state: &mut #state_type, #original_args) #ret_ty {
+            #body
+        }
+    };
+
     quote! {
-        // Create a struct implementing the Stage trait
-        #[derive(Clone)]
-        #fn_vis struct #stage_name {
-            inputs: std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)>,
-            outputs: std::collections::HashMap<directed::DataLabel, std::any::TypeId>,
+        #(#attrs)*
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Copy)]
+        #vis struct #stage_name;
+
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Copy)]
+        #vis struct #handle_name {
+            id: directed::NodeId,
         }
 
-        impl #stage_name {
-            pub fn new() -> Self {
-                let mut inputs = std::collections::HashMap::new();
-                let mut outputs = std::collections::HashMap::new();
-                #(#input_registrations)*
-                #(#output_registrations)*
-                Self { inputs, outputs }
+        impl #handle_name {
+            #(#input_methods)*
+            #(#output_methods)*
+        }
+
+        impl directed::StageHandle for #handle_name {
+            fn id(&self) -> directed::NodeId {
+                self.id
             }
         }
 
         impl directed::Stage for #stage_name {
             type State = #state_type;
-            type BaseFn = fn(state: &mut #state_type, #original_args) #fn_return_type;
+            type Handle = #handle_name;
 
-            fn inputs(&self) -> &std::collections::HashMap<directed::DataLabel, (std::any::TypeId, directed::RefType)> {
-                &self.inputs
+            const EVAL: directed::EvalStrategy = #eval;
+            const CACHE: directed::CachePolicy = #cache_tokens;
+
+            fn signature() -> &'static directed::Signature {
+                static __SIGNATURE: std::sync::OnceLock<directed::Signature> =
+                    std::sync::OnceLock::new();
+                __SIGNATURE.get_or_init(|| directed::Signature {
+                    stage: stringify!(#stage_name),
+                    inputs: vec![ #(#input_ports),* ],
+                    outputs: vec![ #(#output_ports),* ],
+                })
             }
 
-            fn outputs(&self) -> &std::collections::HashMap<directed::DataLabel, std::any::TypeId> {
-                &self.outputs
+            fn handle(id: directed::NodeId) -> Self::Handle {
+                #handle_name { id }
             }
 
-            fn evaluate(&self, state: &mut Self::State, inputs: &mut std::collections::HashMap<directed::DataLabel, (std::sync::Arc<dyn std::any::Any + Send + Sync>, directed::ReevaluationRule)>) -> Result<directed::NodeOutput, directed::InjectionError> {
-                #(#extraction_code)*
-                #(#prepare_input_types_code)*
-                #output_handling
-            }
-
-            fn eval_strategy(&self) -> directed::EvalStrategy {
-                #eval_strategy
-            }
-
-            fn reeval_rule(&self) -> directed::ReevaluationRule {
-                #reevaluation_rule
-            }
-
-            // TODO: This can be simplified to be a bit less unruly
-            fn inject_input(&self, node: &mut directed::Node<Self>, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                fn inject_opaque_out(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                    match input.inner() {
-                        #(#inject_opaque_out_code)*
-                    }
+            fn call<'a>(
+                state: &'a mut #state_type,
+                io: &'a mut directed::Io,
+            ) -> impl std::future::Future<Output = Result<(), directed::CallError>> + Send + 'a {
+                #body_fn
+                async move {
+                    #(#extraction)*
+                    let __result = __body(state, #(#arg_idents),*) #maybe_await;
+                    #output_handling
+                    Ok(())
                 }
-                fn inject_transparent_out_to_owned_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                    match input.inner() {
-                        #(#inject_transparent_out_to_owned_in_code)*
-                    }
-                }
-                fn inject_transparent_out_to_opaque_ref_in(node: &mut dyn directed::AnyNode, parent: &mut Box<dyn directed::AnyNode>, output: directed::DataLabel, input: directed::DataLabel) -> Result<(), directed::InjectionError> {
-                    match input.inner() {
-                        #(#inject_transparent_out_to_opaque_ref_in_code)*
-                    }
-                }
-
-                if parent.reeval_rule() == directed::ReevaluationRule::Move {
-                    if node.reeval_rule() == directed::ReevaluationRule::Move && node.input_reftype(&input) != Some(directed::RefType::Owned) {
-                        inject_transparent_out_to_opaque_ref_in(node, parent, output, input)
-                    } else {
-                        inject_opaque_out(node, parent, output, input)
-                    }
-                } else {
-                    inject_transparent_out_to_owned_in(node, parent, output, input)
-                }
-            }
-
-            fn name(&self) -> &str {
-                stringify!(#stage_name)
-            }
-
-            fn get_fn() -> Self::BaseFn {
-                #(#fn_attrs)*
-                fn original_fn(state: &mut #state_type, #original_args) #fn_return_type #original_body
-                return original_fn;
             }
         }
     }

@@ -1,186 +1,176 @@
 # directed
 
-This crate is a Directed-Acrylic-Graph (DAG)-based execution system for Rust. It allows you to wrap functions in a way that converts them into stateful Nodes in a graph. These can then be executed in the shortest-path to be able to evaluate one or more output nodes. Inputs and outputs can be cached (memoization), and nodes can have internal state (or not, anything can be stateless as well). Graph connections can be rewired at runtime without the loss of node state.
+A directed-acyclic-graph execution engine for Rust. Wrap a function with
+`#[stage]` to turn it into a statically-typed node definition, register it in a
+`Registry`, and wire nodes together with `graph!`. Execution walks to the
+nearest *urgent* nodes, evaluating dependencies on demand and reusing cached
+results when inputs have not changed.
 
-Here is a visualization of a trivial program structure using this:
-```mermaid
-flowchart TB
-    subgraph Node_1_["Node 1 (TransparentStage)"]
-        1_in_input[/"input: i32"\]
-        1_out__[\"i32"/]
-    end
-    subgraph Node_0_["Node 0 (SourceStage)"]
-        0_out__[\"i32"/]
-    end
-    subgraph Node_3_["Node 3 (SinkStage)"]
-        3_in_o_input[/"o_input: & i32"\]
-        3_in_t_input[/"t_input: & i32"\]
-    end
-    style Node_3_ stroke:yellow,stroke-width:3;
-    subgraph Node_2_["Node 2 (OpaqueStage)"]
-        2_in_input[/"input: & i32"\]
-        2_out__[\"i32"/]
-    end
-    0_out__ --> 1_in_input
-    0_out__ --> 2_in_input
-    1_out__ --> 3_in_t_input
-    2_out__ --> 3_in_o_input
-    linkStyle 3 stroke:yellow,stroke-width:3;
-```
-
-When possible, the error types in this crate contain a trace of the graph and have the ability to generate a mermaid graph like the above, highlighting areas relevant to the error output. These can be placed into markdown or into an [online viewer](https://mermaid.live/). 
-
-## Current project status
-
-- WIP: Examples work but many intended features are still missing, and the codebase structure is in general in an "under-construction" state. TODOs litered throughout the codebase need to be extracted out into a coherent plan.
-
-## Core API Concepts
-
-### Stage
-
-A `Stage` is a wrapped function that can be used to create a `Node`. Think of a `Stage` as a definition and a `Node` as a stateful instantiation.   
-
-When a function is annotated with the `#[stage]` macro, it will be converted to a struct of the same name, and given an implementation of the `Stage` trait. For this reason, struct naming conventions should be followed rather than function naming conventions:
 ```rust
-#[stage]
-fn SimpleStage() -> String {
-    String::from("Hello graph!")
-}
-```
+use directed::{Registry, graph, stage};
 
-#### Multi-output
-Stages can support multiple named outputs by making use of the `NodeOutput` type and the `output` macro. This can be used to make connections between specific outputs of one node to specific inputs of another:
-```rust
-// When multiple outputs exist, they must be specified within 'out'. Syntax is siumilar to typical input arguments.
-#[stage(out(output1: u32, output2: String))]
-fn MultiOutputStage() -> NodeOutput {
-    let output2 = String::from("Hello graph!");
-    output! {
-        output1: 42,
-        // Typical struct creation rules apply, no need to specify the name twice
-        output2
-    }
-}
-```
-
-#### Lazy
-Stages can be annotated as `lazy`. This will indicate that it's node will never be evaluated until a child node needs its output to evaluate. Typical graphs will have multiple lazy nodes, and one or possibly a few non-lazy nodes. A graph with only lazy nodes will do nothing at all:
-```rust
-#[stage(lazy)]
-fn LazyStage() -> String {
-    String::from("Hello dependant node!")
-}
-```
-
-#### Cache Last
-Stages can be annotated as `cache_last`. This will indicate that if reevaluated with identical inputs to the previous evaluation, it will just return cached outputs without rerunning the function:
-```rust
-// If this is run with 31 as an input twice, "to_string" will not be called the 2nd time.
-#[stage(lazy)]
-fn CacheLastStage(num: u32) -> String {
-    num.to_string()
-}
-```
-
-Preconditions:
-- All inputs must be `PartialEq` (compile-time error if condition is not met)
-- All inputs must be `Clone` (compile-time error if condition is not met)
-- Outputs must be `Clone` UNLESS all connected child nodes take input only by reference (runtime error neither of these conditions are met)
-
-#### Cache All
-TODO: Not yet implemented
-
-Once implemented this will do true memoization - for any previously identical input, return the associated output without reevaluating.
-
-Preconditions:
-- All previous conditions for `cache_last`
-- All inputs must be `Hash`
-
-### Registry
-
-A `Registry` stores nodes and their state. It's distinctly seperate from `Graph` itself which just stores information on how nodes are connected. This come swith a few benefits:
-- Any number of distinct `Graph`s can be created for a single `Registry`. Node state can be reused to evaluate a single graph or among distinct graphs.
-- To evaluate a graph, an `&mut Registry` is passed in. Graphs don't take exclusive ownership of the registry, and are thus stateless.
-
-Here's an example of creating a registry and adding nodes to it:
-```rust
-#[stage]
-fn SimpleStage() -> String {
-    String::from("Hello graph!")
-}
-
-fn main() {
-    let mut registry = Registry::new();
-    // This returns a simple incremented integer ID, which can be used to lookup the node in the registry.
-    let node_1 = registry.register(SimpleStage::new());
-}
-```
-
-### Graph
-
-Putting it all together, the `Graph` struct stores node IDs and the connections between the outputs of nodes to the inputs of other nodes. Creating one is easy, and the `graph` macro exists to make the connections more visually intuitive. See the example below of putting a variety of concepts together and finally making a graph:
-```rust
 #[stage(lazy, cache_last)]
-fn TinyStage1() -> String {
-    println!("Running stage 1");
-    String::from("This is the output!")
+fn Source() -> i32 {
+    21
 }
 
 #[stage(lazy)]
-fn TinyStage2(input: String, input2: String) -> String {
-    println!("Running stage 2");
-    input.to_uppercase() + " [" + &input.chars().count().to_string() + " chars]"
+fn Double(input: i32) -> i32 {
+    input * 2
 }
 
 #[stage]
-fn TinyStage3(input: String) {
-    println!("Running stage 3");
-    assert_eq!("THIS IS THE OUTPUT! [19 chars]", input);
+fn Sink(value: i32) {
+    assert_eq!(value, 42);
 }
 
 fn main() {
     let mut registry = Registry::new();
-    let node_1 = registry.register(TinyStage1::new());
-    let node_2 = registry.register(TinyStage2::new());
-    let node_3 = registry.register(TinyStage3::new());
+    let source = registry.register::<Source>();
+    let double = registry.register::<Double>();
+    let sink = registry.register::<Sink>();
 
-    // This macro is basic syntax sugar for a few calls.
     let graph = graph! {
-        // Nodes that will be a part of the graph must be defined.
-        nodes: [node_1, node_2, node_3],
+        nodes: [source, double, sink],
         connections: {
-            // Unnamed outputs are indicated as _. If any of these stages had named outputs, we would put that in its place.
-            node_1: _ => node_2: input,
-            node_1: _ => node_2: input2,
-            node_2: _ => node_3: input,
+            source: out => double: input,
+            double: out => sink: value,
         }
     }
     .unwrap();
 
-    // This will do the following:
-    // - Find the first non-lazy node (node_3).
-    // - Recursively evaluate it's parents (so node_3 will request node_2, which will request node_1 twice)
-    // - node_1 will evaluate, printing "Running stage 1", and pass a clone of its output to "input" on node_2.
-    // - node_1 will not evaluate again, and just pass a clone of its output to "input2" on node_2.
-    // - node_2 will evaluate, printing its output then moving (not cloning) its output to node_3.
-    // - node_3 will evaluate, printing its output that passing the assert successfully.
-    graph.execute(&mut registry).unwrap();
+    graph.execute(&registry).unwrap();
 }
 ```
 
-As stated before, multiple graphs can be created from that same registry, executed in any order.
+## Design
 
-## WIP features/ideas
+- A **`Stage`** is a wrapped function. The `#[stage]` macro emits a marker type,
+  a typed handle, and a small `Stage` impl. All caching and data-flow logic
+  lives in the runtime, not in generated code.
+- A **`Registry`** owns node state. It is separate from a `Graph`, so any number
+  of graphs can share one registry and connections can be rewired at runtime
+  without losing state.
+- A **`Graph`** stores only connectivity. Execution is stateless and takes
+  `&Registry` (node state uses interior mutability so independent nodes run
+  concurrently).
+- Connections are **type-checked at graph construction**: `PortOut<T>` and
+  `PortIn<T>` must share `T`, and `graph!` fails to compile otherwise.
 
-- async execution support (relatively high priority)
-- Make a cool visual "rust playgraph" based on this crate
-    - Ability to create stages, and compile
-    - Ability to create nodes from stages, and attach them and execute (without recompiling!)
-- Improve error system to be cleaner
-- A Graph + Registry could be combined to create a Node (with a baked stage). Right now we combine nodes with stages to make the registry, and registries with graphs. If we could istead combine STAGES with graphs, then output a valid registry full of nodes based on that combination, it would avoid the possibility of combining a registry with an invalid graph entirely.
-    - Extended idea: Full graph sharding with support for distributed execution
-- An attribute that makes it serialize the cache and store between runs
-- Accept inputs for top-level nodes, return outputs from leaf nodes
-- Automatic validators to make sure correct input and output types are present if required
-- Caching ALL possible input combinations, not just previous (cache_all)
-- A way to reset all registry state at once
+## Stages
+
+### Outputs
+
+A single return value is published on the implicit output port `out`. Declare
+named outputs with `out(...)`; the function then returns a tuple in the same
+order:
+
+```rust
+#[stage(out(number: i32, text: String))]
+fn Produce() -> (i32, String) {
+    (42, String::from("hello"))
+}
+```
+
+Connect them with `produce: number` and `produce: text`.
+
+### Evaluation strategy
+
+- `lazy` nodes run only when an urgent descendant needs their output.
+- Non-lazy (default) nodes are **urgent** and are the entry points of an
+  execution. A graph with no urgent node does nothing.
+
+### Caching
+
+- `cache_last` (transparent) reuses the previous outputs when the inputs are
+  unchanged. Requires the input types to be `PartialEq` (enforced at compile
+  time); owned inputs must also be `Clone`.
+- `cache_all` memoizes every distinct input combination. Inputs must also be
+  `Hash`.
+- No attribute (opaque) means the node runs on every execution.
+
+### State
+
+Stages may carry arbitrary per-node state. It is available as `state` inside the
+function body:
+
+```rust
+#[stage(state(u32))]
+fn Counter() {
+    *state += 1;
+}
+
+let node = registry.register_with_state::<Counter>(0);
+```
+
+`registry.register::<S>()` uses `S::State::default()`.
+
+### Async
+
+`async fn` stages are supported. `execute_async` evaluates independent nodes
+concurrently on the current thread; the synchronous `execute` wraps it with
+`block_on`:
+
+```rust
+#[stage]
+async fn Fetch(url: String) -> String {
+    // ...
+    url
+}
+
+let sink = registry.register::<Sink>();
+let outputs = directed::block_on(graph.execute_async(&registry, &[sink.id()])).unwrap();
+```
+
+With the `tokio` feature, `execute_tokio` spawns each ready node onto a
+multi-thread runtime for real parallelism:
+
+```rust
+use std::sync::Arc;
+
+let outputs = graph
+    .execute_tokio(Arc::new(registry), &[sink.id()])
+    .await
+    .unwrap();
+```
+
+### Mutable inputs
+
+A `&mut T` parameter receives a local copy of the input and may mutate it; the
+change is not visible to the producing node. The type must be `Clone`.
+
+## Graph construction and rewiring
+
+```rust
+use directed::GraphBuilder;
+
+let mut builder = GraphBuilder::new();
+builder.add(&node_a);
+builder.add(&node_b);
+
+// Typed connection: the compiler checks that both ports carry the same type.
+builder.connect(node_a.out(), node_b.input()).unwrap();
+
+// Name-based connection, validated at runtime: useful for rewiring.
+builder.connect_by_name(node_a.id(), "out", node_b.id(), "input", &registry).unwrap();
+
+let graph = builder.build();
+```
+
+Cycles are rejected when an edge is added.
+
+## Diagnostics
+
+`Graph::trace` snapshots a graph (optionally highlighting nodes and edges) and
+`Trace::mermaid` renders it as a Mermaid flowchart:
+
+```rust
+let trace = graph.trace(&registry, &[sink.id()], &[]);
+println!("```mermaid\n{}\n```", trace.mermaid());
+```
+
+## Status
+
+Work in progress. Independent nodes are evaluated concurrently on the current
+thread; the optional `tokio` feature adds multi-threaded execution. Owned and
+`&mut` inputs must be `Clone`. See `REWRITE_PLAN.md` for the roadmap.
