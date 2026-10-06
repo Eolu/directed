@@ -26,6 +26,6 @@ pub use execute::{Outputs, block_on};
 pub use graph::{BuildError, Edge, Graph, GraphBuilder, PortIn, PortOut};
 pub use io::Io;
 pub use registry::{NodeId, Registry};
-pub use signature::{InputPort, OutputPort, RefKind, Signature};
+pub use signature::{InputPort, OutputPort, RefKind, Signature, intern_signature};
 pub use stage::{CachePolicy, EvalStrategy, Stage, StageHandle};
 pub use value::{Value, ValueOps};

@@ -54,7 +54,7 @@ fn main() {
 - A **`Graph`** stores only connectivity. Execution is stateless and takes
   `&Registry` (node state uses interior mutability so independent nodes run
   concurrently).
-- Connections are type-checked at graph construction: `PortOut<T>` and
+- Connections are **type-checked at graph construction**: `PortOut<T>` and
   `PortIn<T>` must share `T`, and `graph!` fails to compile otherwise.
 
 ## Stages
@@ -139,6 +139,22 @@ let outputs = graph
 A `&mut T` parameter receives a local copy of the input and may mutate it; the
 change is not visible to the producing node. The type must be `Clone`.
 
+### Generics
+
+Stages may be generic over type parameters:
+
+```rust
+#[stage]
+fn Identity<T>(value: T) -> T {
+    value
+}
+
+let node = registry.register::<Identity<i32>>();
+```
+
+Type parameters must be `Clone + Send + Sync + 'static` (plus `PartialEq`/`Hash`
+when caching). Lifetime and const parameters are not supported.
+
 ## Graph construction and rewiring
 
 ```rust
@@ -169,3 +185,8 @@ let trace = graph.trace(&registry, &[sink.id()], &[]);
 println!("```mermaid\n{}\n```", trace.mermaid());
 ```
 
+## Status
+
+Work in progress. Independent nodes are evaluated concurrently on the current
+thread; the optional `tokio` feature adds multi-threaded execution. Owned and
+`&mut` inputs must be `Clone`. See `REWRITE_PLAN.md` for the roadmap.

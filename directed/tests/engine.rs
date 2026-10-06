@@ -553,3 +553,155 @@ fn mutable_reference_input_test() {
 
     graph.execute(&registry).unwrap();
 }
+
+#[test]
+fn generic_stage_test() {
+    #[directed::stage]
+    fn Identity<T>(value: T) -> T {
+        value
+    }
+
+    #[directed::stage]
+    fn MakeString() -> String {
+        String::from("hello")
+    }
+
+    #[directed::stage]
+    fn StringSink(value: String) {
+        assert_eq!(value, "hello");
+    }
+
+    let mut registry = Registry::new();
+    let source = registry.register::<MakeString>();
+    let identity = registry.register::<Identity<String>>();
+    let sink = registry.register::<StringSink>();
+
+    let graph = directed::graph! {
+        nodes: [source, identity, sink],
+        connections: {
+            source: out => identity: value,
+            identity: out => sink: value,
+        }
+    }
+    .unwrap();
+
+    graph.execute(&registry).unwrap();
+}
+
+#[test]
+fn generic_stage_distinct_instantiations() {
+    #[directed::stage]
+    fn Identity<T>(value: T) -> T {
+        value
+    }
+
+    #[directed::stage]
+    fn IntSource() -> i32 {
+        7
+    }
+
+    #[directed::stage]
+    fn StrSource() -> String {
+        String::from("x")
+    }
+
+    #[directed::stage]
+    fn IntSink(value: i32) {
+        assert_eq!(value, 7);
+    }
+
+    #[directed::stage]
+    fn StrSink(value: String) {
+        assert_eq!(value, "x");
+    }
+
+    let mut registry = Registry::new();
+    let int_source = registry.register::<IntSource>();
+    let str_source = registry.register::<StrSource>();
+    let int_id = registry.register::<Identity<i32>>();
+    let str_id = registry.register::<Identity<String>>();
+    let int_sink = registry.register::<IntSink>();
+    let str_sink = registry.register::<StrSink>();
+
+    // The two `Identity` instantiations must have distinct signatures.
+    let int_signature = <Identity<i32> as directed::Stage>::signature();
+    let str_signature = <Identity<String> as directed::Stage>::signature();
+    assert_ne!(
+        int_signature.inputs[0].ops.type_id,
+        str_signature.inputs[0].ops.type_id
+    );
+
+    let graph = directed::graph! {
+        nodes: [int_source, str_source, int_id, str_id, int_sink, str_sink],
+        connections: {
+            int_source: out => int_id: value,
+            int_id: out => int_sink: value,
+            str_source: out => str_id: value,
+            str_id: out => str_sink: value,
+        }
+    }
+    .unwrap();
+
+    graph.execute(&registry).unwrap();
+}
+
+#[test]
+fn generic_stage_with_cache() {
+    #[directed::stage(lazy, cache_last)]
+    fn Identity<T>(value: T) -> T {
+        value
+    }
+
+    #[directed::stage]
+    fn Source() -> i32 {
+        21
+    }
+
+    #[directed::stage]
+    fn Sink(value: i32) {
+        assert_eq!(value, 21);
+    }
+
+    let mut registry = Registry::new();
+    let source = registry.register::<Source>();
+    let identity = registry.register::<Identity<i32>>();
+    let sink = registry.register::<Sink>();
+
+    let graph = directed::graph! {
+        nodes: [source, identity, sink],
+        connections: {
+            source: out => identity: value,
+            identity: out => sink: value,
+        }
+    }
+    .unwrap();
+
+    graph.execute(&registry).unwrap();
+    graph.execute(&registry).unwrap();
+}
+
+#[test]
+fn distinct_generic_stages_same_type_arg() {
+    #[directed::stage]
+    fn Passthrough<T>(value: T) -> T {
+        value
+    }
+
+    #[directed::stage]
+    fn WrapVec<T>(value: T) -> Vec<T> {
+        vec![value]
+    }
+
+    let passthrough = <Passthrough<i32> as directed::Stage>::signature();
+    let wrap = <WrapVec<i32> as directed::Stage>::signature();
+
+    assert_eq!(passthrough.stage, "Passthrough");
+    assert_eq!(wrap.stage, "WrapVec");
+    // Different generic stages with the same type argument must not share a
+    // signature (regression: interning keyed only on the type arguments).
+    assert!(!std::ptr::eq(passthrough, wrap));
+    assert_ne!(
+        passthrough.outputs[0].ops.type_id,
+        wrap.outputs[0].ops.type_id
+    );
+}

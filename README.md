@@ -139,6 +139,22 @@ let outputs = graph
 A `&mut T` parameter receives a local copy of the input and may mutate it; the
 change is not visible to the producing node. The type must be `Clone`.
 
+### Generics
+
+Stages may be generic over type parameters:
+
+```rust
+#[stage]
+fn Identity<T>(value: T) -> T {
+    value
+}
+
+let node = registry.register::<Identity<i32>>();
+```
+
+Type parameters must be `Clone + Send + Sync + 'static` (plus `PartialEq`/`Hash`
+when caching). Lifetime and const parameters are not supported.
+
 ## Graph construction and rewiring
 
 ```rust

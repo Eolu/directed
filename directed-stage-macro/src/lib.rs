@@ -63,6 +63,7 @@ struct StageConfig {
     inputs: Vec<InputParam>,
     outputs: Vec<OutputParam>,
     state_type: TokenStream2,
+    generics: syn::Generics,
 }
 
 // --- attribute parsing ------------------------------------------------------
@@ -163,6 +164,27 @@ impl StageConfig {
 
         let inputs = Self::extract_inputs(&input_fn.sig.inputs)?;
 
+        // Only type generics are supported: lifetimes cannot be `'static`, and
+        // const generics have no `TypeId`.
+        let generics = input_fn.sig.generics.clone();
+        for param in &generics.params {
+            match param {
+                syn::GenericParam::Type(_) => {}
+                syn::GenericParam::Lifetime(lifetime) => {
+                    return Err(syn::Error::new_spanned(
+                        lifetime,
+                        "lifetime parameters are not supported on stages",
+                    ));
+                }
+                syn::GenericParam::Const(constant) => {
+                    return Err(syn::Error::new_spanned(
+                        constant,
+                        "const generic parameters are not supported on stages",
+                    ));
+                }
+            }
+        }
+
         let outputs = if explicit_outputs.is_empty() {
             vec![OutputParam {
                 name: format_ident!("out"),
@@ -181,6 +203,7 @@ impl StageConfig {
             inputs,
             outputs,
             state_type,
+            generics,
         })
     }
 
@@ -266,7 +289,40 @@ fn expand(config: StageConfig) -> TokenStream2 {
         inputs,
         outputs,
         state_type,
+        generics,
     } = config;
+
+    let type_params: Vec<Ident> = generics
+        .type_params()
+        .map(|param| param.ident.clone())
+        .collect();
+    let is_generic = !type_params.is_empty();
+
+    // Every type parameter must satisfy the requirements the runtime places on
+    // port types, plus whatever the cache policy needs.
+    let mut generics = generics;
+    if is_generic {
+        let mut bounds: Vec<syn::TypeParamBound> = vec![
+            syn::parse_quote!(Clone),
+            syn::parse_quote!(Send),
+            syn::parse_quote!(Sync),
+            syn::parse_quote!('static),
+        ];
+        if cache != CacheStrategy::None {
+            bounds.push(syn::parse_quote!(PartialEq));
+        }
+        if cache == CacheStrategy::All {
+            bounds.push(syn::parse_quote!(Hash));
+        }
+        let where_clause = generics.make_where_clause();
+        for ident in &type_params {
+            let bounds = bounds.clone();
+            where_clause
+                .predicates
+                .push(syn::parse_quote!(#ident: #(#bounds)+*));
+        }
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let vis = &original_fn.vis;
     let attrs = &original_fn.attrs;
@@ -317,7 +373,7 @@ fn expand(config: StageConfig) -> TokenStream2 {
                 directed::PortIn::new(
                     self.id,
                     #index_u16,
-                    &<#stage_name as directed::Stage>::signature().inputs[#index],
+                    &<#stage_name #ty_generics as directed::Stage>::signature().inputs[#index],
                 )
             }
         }
@@ -331,7 +387,7 @@ fn expand(config: StageConfig) -> TokenStream2 {
                 directed::PortOut::new(
                     self.id,
                     #index_u16,
-                    &<#stage_name as directed::Stage>::signature().outputs[#index],
+                    &<#stage_name #ty_generics as directed::Stage>::signature().outputs[#index],
                 )
             }
         }
@@ -378,43 +434,46 @@ fn expand(config: StageConfig) -> TokenStream2 {
         }
     };
 
-    let body_fn = quote! {
-        #[allow(non_snake_case, clippy::too_many_arguments)]
-        #asyncness fn __body(state: &mut #state_type, #original_args) #ret_ty {
-            #body
-        }
+    let (body_fn, body_call) = if is_generic {
+        let turbofish = quote!(::<#(#type_params),*>);
+        (
+            quote! {
+                #[allow(non_snake_case, clippy::too_many_arguments)]
+                #asyncness fn __body #impl_generics (state: &mut #state_type, #original_args) #ret_ty #where_clause {
+                    #body
+                }
+            },
+            quote!(__body #turbofish (state, #(#arg_idents),*) #maybe_await),
+        )
+    } else {
+        (
+            quote! {
+                #[allow(non_snake_case, clippy::too_many_arguments)]
+                #asyncness fn __body(state: &mut #state_type, #original_args) #ret_ty {
+                    #body
+                }
+            },
+            quote!(__body(state, #(#arg_idents),*) #maybe_await),
+        )
     };
 
-    quote! {
-        #(#attrs)*
-        #[allow(non_camel_case_types)]
-        #[derive(Clone, Copy)]
-        #vis struct #stage_name;
-
-        #[allow(non_camel_case_types)]
-        #[derive(Clone, Copy)]
-        #vis struct #handle_name {
-            id: directed::NodeId,
-        }
-
-        impl #handle_name {
-            #(#input_methods)*
-            #(#output_methods)*
-        }
-
-        impl directed::StageHandle for #handle_name {
-            fn id(&self) -> directed::NodeId {
-                self.id
+    let signature_fn = if is_generic {
+        quote! {
+            fn signature() -> &'static directed::Signature {
+                // Key on the concrete stage type: distinct generic stages with
+                // the same type arguments must not share a signature.
+                directed::intern_signature(
+                    vec![std::any::TypeId::of::<#stage_name #ty_generics>()],
+                    || directed::Signature {
+                        stage: stringify!(#stage_name),
+                        inputs: vec![ #(#input_ports),* ],
+                        outputs: vec![ #(#output_ports),* ],
+                    },
+                )
             }
         }
-
-        impl directed::Stage for #stage_name {
-            type State = #state_type;
-            type Handle = #handle_name;
-
-            const EVAL: directed::EvalStrategy = #eval;
-            const CACHE: directed::CachePolicy = #cache_tokens;
-
+    } else {
+        quote! {
             fn signature() -> &'static directed::Signature {
                 static __SIGNATURE: std::sync::OnceLock<directed::Signature> =
                     std::sync::OnceLock::new();
@@ -424,9 +483,90 @@ fn expand(config: StageConfig) -> TokenStream2 {
                     outputs: vec![ #(#output_ports),* ],
                 })
             }
+        }
+    };
+
+    let handle_fn = if is_generic {
+        quote! {
+            #handle_name { id, _marker: std::marker::PhantomData }
+        }
+    } else {
+        quote! {
+            #handle_name { id }
+        }
+    };
+
+    let (stage_def, handle_def, handle_copy) = if is_generic {
+        let phantom = quote!(( #( #type_params, )* ));
+        (
+            quote! {
+                #[allow(non_camel_case_types)]
+                #vis struct #stage_name #impl_generics (
+                    std::marker::PhantomData<fn() -> #phantom>
+                ) #where_clause;
+            },
+            quote! {
+                #[allow(non_camel_case_types)]
+                #vis struct #handle_name #impl_generics #where_clause {
+                    id: directed::NodeId,
+                    _marker: std::marker::PhantomData<fn() -> #phantom>,
+                }
+            },
+            quote! {
+                impl #impl_generics Clone for #handle_name #ty_generics #where_clause {
+                    fn clone(&self) -> Self {
+                        *self
+                    }
+                }
+                impl #impl_generics Copy for #handle_name #ty_generics #where_clause {}
+            },
+        )
+    } else {
+        (
+            quote! {
+                #[allow(non_camel_case_types)]
+                #[derive(Clone, Copy)]
+                #vis struct #stage_name;
+            },
+            quote! {
+                #[allow(non_camel_case_types)]
+                #[derive(Clone, Copy)]
+                #vis struct #handle_name {
+                    id: directed::NodeId,
+                }
+            },
+            quote! {},
+        )
+    };
+
+    quote! {
+        #(#attrs)*
+        #stage_def
+        #handle_def
+        #handle_copy
+
+        impl #impl_generics #handle_name #ty_generics #where_clause {
+            #(#input_methods)*
+            #(#output_methods)*
+        }
+
+        impl #impl_generics directed::StageHandle for #handle_name #ty_generics #where_clause {
+            fn id(&self) -> directed::NodeId {
+                self.id
+            }
+        }
+
+        impl #impl_generics directed::Stage for #stage_name #ty_generics #where_clause {
+            type State = #state_type;
+            type Handle = #handle_name #ty_generics;
+
+            const EVAL: directed::EvalStrategy = #eval;
+            const CACHE: directed::CachePolicy = #cache_tokens;
+
+            #signature_fn
 
             fn handle(id: directed::NodeId) -> Self::Handle {
-                #handle_name { id }
+                #handle_fn
             }
 
             fn call<'a>(
@@ -436,7 +576,7 @@ fn expand(config: StageConfig) -> TokenStream2 {
                 #body_fn
                 async move {
                     #(#extraction)*
-                    let __result = __body(state, #(#arg_idents),*) #maybe_await;
+                    let __result = #body_call;
                     #output_handling
                     Ok(())
                 }
